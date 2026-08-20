@@ -1,0 +1,616 @@
+Using Grafana for Kubernetes Monitoring
+Lab Objectives
+By the end of this lab, you will be able to:
+
+Install and configure a local Kubernetes cluster using Minikube
+Deploy Prometheus monitoring system in Kubernetes
+Install and configure Grafana for data visualization
+Integrate Prometheus as a data source in Grafana
+Create comprehensive dashboards for monitoring Kubernetes cluster health
+Monitor key Kubernetes metrics including node health, pod status, and resource utilization
+Understand the relationship between Prometheus metrics collection and Grafana visualization
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Linux command line operations
+Familiarity with containerization concepts (Docker)
+Basic knowledge of Kubernetes concepts (pods, services, deployments)
+Understanding of monitoring and observability principles
+Experience with YAML configuration files
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated Linux environment. The provided machine is bare metal with no pre-installed tools, so you will install all required components during the lab exercises.
+
+All tasks in this lab will be performed on a single Linux machine, ensuring a streamlined learning experience.
+
+Task 1: Set up Prometheus in Kubernetes
+Subtask 1.1: Install Required Dependencies
+First, we need to install Docker, kubectl, and Minikube to create our Kubernetes environment.
+
+Step 1: Update the system and install Docker
+
+# Update package repository
+sudo apt update && sudo apt upgrade -y
+
+# Install Docker
+sudo apt install -y docker.io
+
+# Start and enable Docker service
+sudo systemctl start docker
+sudo systemctl enable docker
+
+# Add current user to docker group
+sudo usermod -aG docker $USER
+
+# Apply group changes
+newgrp docker
+
+# Verify Docker installation
+docker --version
+Step 2: Install kubectl
+
+# Download kubectl binary
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+
+# Make kubectl executable
+chmod +x kubectl
+
+# Move kubectl to system PATH
+sudo mv kubectl /usr/local/bin/
+
+# Verify kubectl installation
+kubectl version --client
+Step 3: Install Minikube
+
+# Download Minikube binary
+curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+
+# Install Minikube
+sudo install minikube-linux-amd64 /usr/local/bin/minikube
+
+# Verify Minikube installation
+minikube version
+Subtask 1.2: Start Kubernetes Cluster
+Step 1: Start Minikube cluster
+
+# Start Minikube with Docker driver
+minikube start --driver=docker --memory=4096 --cpus=2
+
+# Verify cluster status
+minikube status
+
+# Check cluster information
+kubectl cluster-info
+Step 2: Enable necessary Minikube addons
+
+# Enable metrics server for resource monitoring
+minikube addons enable metrics-server
+
+# Verify addon status
+minikube addons list
+Subtask 1.3: Deploy Prometheus to Kubernetes
+Step 1: Create Prometheus namespace
+
+# Create monitoring namespace
+kubectl create namespace monitoring
+
+# Verify namespace creation
+kubectl get namespaces
+Step 2: Create Prometheus configuration
+
+Create a ConfigMap for Prometheus configuration:
+
+cat << 'EOF' > prometheus-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    
+    rule_files:
+      # - "first_rules.yml"
+      # - "second_rules.yml"
+    
+    scrape_configs:
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+      
+      - job_name: 'kubernetes-apiservers'
+        kubernetes_sd_configs:
+        - role: endpoints
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+          action: keep
+          regex: default;kubernetes;https
+      
+      - job_name: 'kubernetes-nodes'
+        kubernetes_sd_configs:
+        - role: node
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+        - action: labelmap
+          regex: __meta_kubernetes_node_label_(.+)
+        - target_label: __address__
+          replacement: kubernetes.default.svc:443
+        - source_labels: [__meta_kubernetes_node_name]
+          regex: (.+)
+          target_label: __metrics_path__
+          replacement: /api/v1/nodes/${1}/proxy/metrics
+      
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+        - role: pod
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+          action: keep
+          regex: true
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+          action: replace
+          target_label: __metrics_path__
+          regex: (.+)
+        - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+          action: replace
+          regex: ([^:]+)(?::\d+)?;(\d+)
+          replacement: $1:$2
+          target_label: __address__
+        - action: labelmap
+          regex: __meta_kubernetes_pod_label_(.+)
+        - source_labels: [__meta_kubernetes_namespace]
+          action: replace
+          target_label: kubernetes_namespace
+        - source_labels: [__meta_kubernetes_pod_name]
+          action: replace
+          target_label: kubernetes_pod_name
+EOF
+
+# Apply the ConfigMap
+kubectl apply -f prometheus-config.yaml
+Step 3: Create Prometheus RBAC permissions
+
+cat << 'EOF' > prometheus-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+- apiGroups: [""]
+  resources:
+  - nodes
+  - nodes/proxy
+  - services
+  - endpoints
+  - pods
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - extensions
+  resources:
+  - ingresses
+  verbs: ["get", "list", "watch"]
+- nonResourceURLs: ["/metrics"]
+  verbs: ["get"]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+- kind: ServiceAccount
+  name: prometheus
+  namespace: monitoring
+EOF
+
+# Apply RBAC configuration
+kubectl apply -f prometheus-rbac.yaml
+Step 4: Deploy Prometheus
+
+cat << 'EOF' > prometheus-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels:
+    app: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      containers:
+      - name: prometheus
+        image: prom/prometheus:latest
+        args:
+          - '--config.file=/etc/prometheus/prometheus.yml'
+          - '--storage.tsdb.path=/prometheus/'
+          - '--web.console.libraries=/etc/prometheus/console_libraries'
+          - '--web.console.templates=/etc/prometheus/consoles'
+          - '--storage.tsdb.retention.time=200h'
+          - '--web.enable-lifecycle'
+        ports:
+        - containerPort: 9090
+        volumeMounts:
+        - name: prometheus-config-volume
+          mountPath: /etc/prometheus/
+        - name: prometheus-storage-volume
+          mountPath: /prometheus/
+      volumes:
+      - name: prometheus-config-volume
+        configMap:
+          defaultMode: 420
+          name: prometheus-config
+      - name: prometheus-storage-volume
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-service
+  namespace: monitoring
+  annotations:
+      prometheus.io/scrape: 'true'
+      prometheus.io/port:   '9090'
+spec:
+  selector: 
+    app: prometheus
+  type: NodePort
+  ports:
+    - port: 8080
+      targetPort: 9090 
+      nodePort: 30000
+EOF
+
+# Deploy Prometheus
+kubectl apply -f prometheus-deployment.yaml
+Step 5: Verify Prometheus deployment
+
+# Check deployment status
+kubectl get deployments -n monitoring
+
+# Check pods status
+kubectl get pods -n monitoring
+
+# Check service status
+kubectl get services -n monitoring
+
+# Wait for pod to be ready
+kubectl wait --for=condition=ready pod -l app=prometheus -n monitoring --timeout=300s
+Task 2: Integrate Prometheus with Grafana
+Subtask 2.1: Deploy Grafana to Kubernetes
+Step 1: Create Grafana deployment
+
+cat << 'EOF' > grafana-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      name: grafana
+      labels:
+        app: grafana
+    spec:
+      containers:
+      - name: grafana
+        image: grafana/grafana:latest
+        ports:
+        - name: grafana
+          containerPort: 3000
+        env:
+        - name: GF_SECURITY_ADMIN_USER
+          value: admin
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          value: admin123
+        volumeMounts:
+        - mountPath: /var/lib/grafana
+          name: grafana-storage
+      volumes:
+      - name: grafana-storage
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-service
+  namespace: monitoring
+  annotations:
+      prometheus.io/scrape: 'true'
+      prometheus.io/port:   '3000'
+spec:
+  selector: 
+    app: grafana
+  type: NodePort  
+  ports:
+    - port: 3000
+      targetPort: 3000
+      nodePort: 32000
+EOF
+
+# Deploy Grafana
+kubectl apply -f grafana-deployment.yaml
+Step 2: Verify Grafana deployment
+
+# Check deployment status
+kubectl get deployments -n monitoring
+
+# Check pods status
+kubectl get pods -n monitoring
+
+# Wait for Grafana pod to be ready
+kubectl wait --for=condition=ready pod -l app=grafana -n monitoring --timeout=300s
+
+# Get Minikube IP for accessing services
+minikube ip
+Subtask 2.2: Access Grafana Web Interface
+Step 1: Access Grafana through browser
+
+# Get the Minikube IP address
+MINIKUBE_IP=$(minikube ip)
+echo "Grafana URL: http://$MINIKUBE_IP:32000"
+echo "Prometheus URL: http://$MINIKUBE_IP:30000"
+
+# Alternative: Use port forwarding for local access
+kubectl port-forward -n monitoring service/grafana-service 3000:3000 &
+kubectl port-forward -n monitoring service/prometheus-service 9090:8080 &
+Note: If using port forwarding, access Grafana at http://localhost:3000 and Prometheus at http://localhost:9090
+
+Step 2: Login to Grafana
+
+Username: admin
+Password: admin123
+Subtask 2.3: Configure Prometheus as Data Source
+Step 1: Add Prometheus data source via Grafana UI
+
+Click on Configuration (gear icon) in the left sidebar
+Select Data Sources
+Click Add data source
+Select Prometheus
+Configure the following settings:
+Name: Prometheus
+URL: http://prometheus-service.monitoring.svc.cluster.local:8080
+Leave other settings as default
+Click Save & Test
+Step 2: Verify data source connection
+
+The connection should show "Data source is working" message.
+
+Task 3: Create Dashboards for Kubernetes Metrics
+Subtask 3.1: Import Pre-built Kubernetes Dashboard
+Step 1: Import Kubernetes cluster monitoring dashboard
+
+Click on + (plus icon) in the left sidebar
+Select Import
+Enter dashboard ID: 3119 (Kubernetes cluster monitoring dashboard)
+Click Load
+Select Prometheus as the data source
+Click Import
+Step 2: Explore the imported dashboard
+
+The dashboard will display various Kubernetes metrics including:
+
+Cluster CPU usage
+Memory utilization
+Pod status
+Node information
+Network traffic
+Subtask 3.2: Create Custom Dashboard for Pod Monitoring
+Step 1: Create a new dashboard
+
+Click on + (plus icon) in the left sidebar
+Select Dashboard
+Click Add new panel
+Step 2: Configure CPU usage panel
+
+In the query editor, enter the following PromQL query:
+sum(rate(container_cpu_usage_seconds_total{container!="POD",container!=""}[5m])) by (pod)
+Set Panel Title: "Pod CPU Usage"
+Set Unit: "percent (0-100)"
+Click Apply
+Step 3: Add Memory usage panel
+
+Click Add panel
+Enter the following query:
+sum(container_memory_usage_bytes{container!="POD",container!=""}) by (pod) / 1024 / 1024
+Set Panel Title: "Pod Memory Usage (MB)"
+Set Unit: "bytes"
+Click Apply
+Step 4: Add Pod status panel
+
+Click Add panel
+Enter the following query:
+kube_pod_status_phase
+Set Panel Title: "Pod Status"
+Change visualization type to Stat
+Click Apply
+Step 5: Save the dashboard
+
+Click the Save icon (disk icon) at the top
+Enter Dashboard name: "Custom Kubernetes Pod Monitoring"
+Click Save
+Subtask 3.3: Create Node Monitoring Dashboard
+Step 1: Create another new dashboard
+
+Click on + (plus icon) in the left sidebar
+Select Dashboard
+Click Add new panel
+Step 2: Configure Node CPU panel
+
+Enter the following query:
+100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+Set Panel Title: "Node CPU Usage (%)"
+Set Unit: "percent (0-100)"
+Click Apply
+Step 3: Add Node Memory panel
+
+Click Add panel
+Enter the following query:
+(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100
+Set Panel Title: "Node Memory Usage (%)"
+Set Unit: "percent (0-100)"
+Click Apply
+Step 4: Add Disk usage panel
+
+Click Add panel
+Enter the following query:
+100 - ((node_filesystem_avail_bytes{mountpoint="/",fstype!="rootfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!="rootfs"}) * 100)
+Set Panel Title: "Node Disk Usage (%)"
+Set Unit: "percent (0-100)"
+Click Apply
+Step 5: Save the node dashboard
+
+Click the Save icon
+Enter Dashboard name: "Kubernetes Node Monitoring"
+Click Save
+Subtask 3.4: Set up Alerting (Optional)
+Step 1: Create alert rule
+
+Go to Alerting in the left sidebar
+Click Alert Rules
+Click New Rule
+Configure the following:
+Query: up{job="kubernetes-nodes"} == 0
+Condition: IS BELOW 1
+Evaluation: Every 1m for 5m
+Add Alert Details:
+Rule name: "Node Down Alert"
+Message: "Kubernetes node is down"
+Click Save
+Verification and Testing
+Verify Prometheus Metrics Collection
+Step 1: Check Prometheus targets
+
+Access Prometheus web interface at http://<MINIKUBE_IP>:30000
+Go to Status > Targets
+Verify that Kubernetes targets are being scraped successfully
+Step 2: Query metrics directly
+
+Go to Graph tab in Prometheus
+Try sample queries:
+up
+kube_pod_info
+node_cpu_seconds_total
+Verify Grafana Dashboard Functionality
+Step 1: Check dashboard data
+
+Access your custom dashboards in Grafana
+Verify that panels are displaying data
+Check that metrics are updating in real-time
+Step 2: Test dashboard interactivity
+
+Change time ranges on dashboards
+Refresh panels manually
+Verify that data updates accordingly
+Generate Load for Testing
+Step 1: Deploy a test application
+
+# Create a simple nginx deployment for testing
+kubectl create deployment nginx-test --image=nginx --replicas=3
+
+# Expose the deployment
+kubectl expose deployment nginx-test --port=80 --type=NodePort
+
+# Check deployment status
+kubectl get deployments
+kubectl get pods
+Step 2: Monitor the new pods
+
+Go back to your Grafana dashboards
+Observe the new pods appearing in the metrics
+Check CPU and memory usage of the nginx pods
+Troubleshooting Common Issues
+Issue 1: Prometheus not scraping targets
+Solution:
+
+# Check Prometheus pod logs
+kubectl logs -n monitoring deployment/prometheus
+
+# Verify RBAC permissions
+kubectl get clusterrolebinding prometheus
+
+# Check service discovery
+kubectl get endpoints -n monitoring
+Issue 2: Grafana cannot connect to Prometheus
+Solution:
+
+# Verify Prometheus service is running
+kubectl get svc -n monitoring prometheus-service
+
+# Check if Prometheus is accessible from Grafana pod
+kubectl exec -n monitoring deployment/grafana -- wget -qO- http://prometheus-service.monitoring.svc.cluster.local:8080/api/v1/query?query=up
+Issue 3: No data in dashboards
+Solution:
+
+# Check if metrics-server is running
+kubectl get pods -n kube-system | grep metrics-server
+
+# Verify Prometheus configuration
+kubectl get configmap -n monitoring prometheus-config -o yaml
+
+# Check Prometheus targets status via API
+curl http://<MINIKUBE_IP>:30000/api/v1/targets
+Cleanup
+When you're finished with the lab, clean up the resources:
+
+# Delete monitoring namespace (removes all monitoring components)
+kubectl delete namespace monitoring
+
+# Delete test deployment
+kubectl delete deployment nginx-test
+kubectl delete service nginx-test
+
+# Stop Minikube cluster
+minikube stop
+
+# Optional: Delete Minikube cluster completely
+minikube delete
+Conclusion
+In this comprehensive lab, you have successfully:
+
+Set up a complete Kubernetes monitoring stack using open-source tools including Minikube, Prometheus, and Grafana
+Deployed Prometheus with proper RBAC permissions and service discovery configuration to collect metrics from your Kubernetes cluster
+Integrated Grafana with Prometheus as a data source, enabling powerful visualization capabilities
+Created custom dashboards to monitor critical Kubernetes metrics including pod CPU/memory usage, node health, and cluster status
+Imported pre-built dashboards to quickly visualize comprehensive cluster metrics
+Learned to write PromQL queries for extracting specific metrics and creating meaningful visualizations
+This monitoring setup provides you with real-time visibility into your Kubernetes cluster's health and performance. The skills you've developed are essential for:
+
+Production cluster monitoring where early detection of issues prevents downtime
+Resource optimization by understanding usage patterns and identifying bottlenecks
+Capacity planning through historical data analysis and trend identification
+Troubleshooting cluster issues using detailed metrics and visualizations
+The combination of Prometheus for metrics collection and Grafana for visualization represents industry-standard practices for Kubernetes observability. These tools scale from small development clusters to large production environments, making the knowledge you've gained directly applicable to real-world scenarios.
+
+Understanding how to monitor Kubernetes clusters is crucial for maintaining reliable, performant applications in containerized environments, and this lab has provided you with the foundational skills to implement comprehensive monitoring solutions.
