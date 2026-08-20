@@ -1,0 +1,487 @@
+Querying Data with PromQL
+Lab Objectives
+By the end of this lab, you will be able to:
+
+Understand the fundamentals of PromQL (Prometheus Query Language)
+Write simple PromQL queries to retrieve and analyze system metrics
+Use Grafana's Query Editor to create visualizations with Prometheus data
+Create basic dashboards displaying system performance metrics
+Apply PromQL functions and operators for data manipulation
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Linux command line operations
+Familiarity with system monitoring concepts (CPU, memory, disk usage)
+Basic knowledge of time-series data concepts
+Understanding of web browsers and basic networking concepts
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated environment. The provided Linux machine is bare metal with no pre-installed tools, so you will install all required components during the lab exercises.
+
+Task 1: Environment Setup and Installation
+Subtask 1.1: Update System and Install Dependencies
+First, update your system and install necessary dependencies:
+
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y wget curl tar systemctl
+Subtask 1.2: Install Prometheus
+Download and install Prometheus:
+
+# Create prometheus user
+sudo useradd --no-create-home --shell /bin/false prometheus
+
+# Create directories
+sudo mkdir /etc/prometheus
+sudo mkdir /var/lib/prometheus
+sudo chown prometheus:prometheus /etc/prometheus
+sudo chown prometheus:prometheus /var/lib/prometheus
+
+# Download Prometheus
+cd /tmp
+wget https://github.com/prometheus/prometheus/releases/download/v2.45.0/prometheus-2.45.0.linux-amd64.tar.gz
+tar xvf prometheus-2.45.0.linux-amd64.tar.gz
+
+# Copy binaries
+sudo cp prometheus-2.45.0.linux-amd64/prometheus /usr/local/bin/
+sudo cp prometheus-2.45.0.linux-amd64/promtool /usr/local/bin/
+sudo chown prometheus:prometheus /usr/local/bin/prometheus
+sudo chown prometheus:prometheus /usr/local/bin/promtool
+
+# Copy configuration files
+sudo cp -r prometheus-2.45.0.linux-amd64/consoles /etc/prometheus
+sudo cp -r prometheus-2.45.0.linux-amd64/console_libraries /etc/prometheus
+sudo chown -R prometheus:prometheus /etc/prometheus/consoles
+sudo chown -R prometheus:prometheus /etc/prometheus/console_libraries
+Subtask 1.3: Configure Prometheus
+Create the Prometheus configuration file:
+
+sudo tee /etc/prometheus/prometheus.yml > /dev/null <<EOF
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+  
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['localhost:9100']
+EOF
+
+sudo chown prometheus:prometheus /etc/prometheus/prometheus.yml
+Subtask 1.4: Install Node Exporter
+Download and install Node Exporter to collect system metrics:
+
+# Download Node Exporter
+cd /tmp
+wget https://github.com/prometheus/node_exporter/releases/download/v1.6.1/node_exporter-1.6.1.linux-amd64.tar.gz
+tar xvf node_exporter-1.6.1.linux-amd64.tar.gz
+
+# Copy binary
+sudo cp node_exporter-1.6.1.linux-amd64/node_exporter /usr/local/bin/
+sudo chown prometheus:prometheus /usr/local/bin/node_exporter
+Subtask 1.5: Create Systemd Services
+Create systemd service for Prometheus:
+
+sudo tee /etc/systemd/system/prometheus.service > /dev/null <<EOF
+[Unit]
+Description=Prometheus
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=prometheus
+Group=prometheus
+Type=simple
+ExecStart=/usr/local/bin/prometheus \
+    --config.file /etc/prometheus/prometheus.yml \
+    --storage.tsdb.path /var/lib/prometheus/ \
+    --web.console.templates=/etc/prometheus/consoles \
+    --web.console.libraries=/etc/prometheus/console_libraries \
+    --web.listen-address=0.0.0.0:9090 \
+    --web.enable-lifecycle
+
+[Install]
+WantedBy=multi-user.target
+EOF
+Create systemd service for Node Exporter:
+
+sudo tee /etc/systemd/system/node_exporter.service > /dev/null <<EOF
+[Unit]
+Description=Node Exporter
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=prometheus
+Group=prometheus
+Type=simple
+ExecStart=/usr/local/bin/node_exporter
+
+[Install]
+WantedBy=multi-user.target
+EOF
+Subtask 1.6: Start Services
+Enable and start the services:
+
+sudo systemctl daemon-reload
+sudo systemctl enable prometheus
+sudo systemctl enable node_exporter
+sudo systemctl start prometheus
+sudo systemctl start node_exporter
+
+# Verify services are running
+sudo systemctl status prometheus
+sudo systemctl status node_exporter
+Subtask 1.7: Install Grafana
+Install Grafana for visualization:
+
+# Add Grafana GPG key and repository
+wget -q -O - https://packages.grafana.com/gpg.key | sudo apt-key add -
+echo "deb https://packages.grafana.com/oss/deb stable main" | sudo tee -a /etc/apt/sources.list.d/grafana.list
+
+# Update and install Grafana
+sudo apt update
+sudo apt install -y grafana
+
+# Enable and start Grafana
+sudo systemctl enable grafana-server
+sudo systemctl start grafana-server
+sudo systemctl status grafana-server
+Task 2: Writing Simple PromQL Queries
+Subtask 2.1: Access Prometheus Web Interface
+Open your web browser and navigate to:
+
+http://localhost:9090
+You should see the Prometheus web interface. Click on Graph to access the query interface.
+
+Subtask 2.2: Basic Metric Queries
+Let's start with simple queries to understand PromQL basics:
+
+Query 1: CPU Usage
+
+100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+This query calculates the CPU usage percentage by:
+
+Taking the rate of idle CPU time over 5 minutes
+Averaging by instance
+Subtracting from 100 to get usage percentage
+Query 2: Memory Usage
+
+(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100
+This query calculates memory usage percentage by:
+
+Dividing available memory by total memory
+Subtracting from 1 to get used percentage
+Multiplying by 100 for percentage
+Query 3: Disk Usage
+
+100 - ((node_filesystem_avail_bytes{mountpoint="/",fstype!="rootfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!="rootfs"}) * 100)
+This query shows root filesystem usage percentage.
+
+Subtask 2.3: Time-based Queries
+Query 4: Network Traffic Rate
+
+rate(node_network_receive_bytes_total{device!="lo"}[5m])
+This shows the rate of network bytes received per second over 5 minutes, excluding loopback interface.
+
+Query 5: Load Average
+
+node_load1
+This shows the 1-minute load average.
+
+Subtask 2.4: Advanced PromQL Functions
+Query 6: Top Processes by CPU
+
+topk(5, rate(node_cpu_seconds_total{mode!="idle"}[5m]))
+This shows the top 5 CPU-consuming processes.
+
+Query 7: Memory Usage Trend
+
+increase(node_memory_MemTotal_bytes[1h])
+This shows memory changes over the last hour.
+
+Task 3: Using Grafana's Query Editor
+Subtask 3.1: Access Grafana
+Open your web browser and navigate to:
+
+http://localhost:3000
+Default login credentials:
+
+Username: admin
+Password: admin
+You'll be prompted to change the password on first login.
+
+Subtask 3.2: Add Prometheus Data Source
+Click on Configuration (gear icon) in the left sidebar
+Select Data Sources
+Click Add data source
+Select Prometheus
+Configure the data source:
+Name: Prometheus
+URL: http://localhost:9090
+Access: Server (default)
+Click Save & Test
+You should see a green message confirming the data source is working.
+
+Subtask 3.3: Create Your First Dashboard
+Click the + icon in the left sidebar
+Select Dashboard
+Click Add new panel
+Subtask 3.4: CPU Usage Panel
+In the Query Editor:
+
+Query A: Enter the following PromQL query:
+100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+Panel Settings:
+
+Title: CPU Usage
+Unit: Percent (0-100)
+Min: 0
+Max: 100
+Visualization: Select Stat or Gauge
+
+Click Apply to save the panel
+
+Subtask 3.5: Memory Usage Panel
+Add another panel:
+
+Click Add panel at the top
+Query A: Enter:
+(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100
+Panel Settings:
+
+Title: Memory Usage
+Unit: Percent (0-100)
+Min: 0
+Max: 100
+Visualization: Select Stat or Gauge
+
+Click Apply
+
+Subtask 3.6: Network Traffic Panel
+Add a time series panel:
+
+Click Add panel
+Query A: Enter:
+rate(node_network_receive_bytes_total{device!="lo"}[5m])
+Query B: Enter:
+rate(node_network_transmit_bytes_total{device!="lo"}[5m])
+Panel Settings:
+
+Title: Network Traffic
+Unit: Bytes/sec
+Legend:
+Query A: Received
+Query B: Transmitted
+Visualization: Select Time series
+
+Click Apply
+
+Subtask 3.7: Disk Usage Panel
+Add a disk usage panel:
+
+Click Add panel
+Query A: Enter:
+100 - ((node_filesystem_avail_bytes{mountpoint="/",fstype!="rootfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!="rootfs"}) * 100)
+Panel Settings:
+
+Title: Disk Usage (Root)
+Unit: Percent (0-100)
+Min: 0
+Max: 100
+Visualization: Select Gauge
+
+Click Apply
+
+Subtask 3.8: Load Average Panel
+Add a load average panel:
+
+Click Add panel
+Query A: Enter:
+node_load1
+Query B: Enter:
+node_load5
+Query C: Enter:
+node_load15
+Panel Settings:
+
+Title: System Load Average
+Legend:
+Query A: 1 minute
+Query B: 5 minutes
+Query C: 15 minutes
+Visualization: Select Time series
+
+Click Apply
+
+Subtask 3.9: Save Dashboard
+Click the Save icon (disk) at the top
+Dashboard name: System Monitoring
+Description: Basic system metrics dashboard
+Click Save
+Task 4: Advanced PromQL Techniques
+Subtask 4.1: Using Aggregation Functions
+Create a new panel to practice aggregation:
+
+Query with sum():
+
+sum(rate(node_network_receive_bytes_total[5m]))
+Query with avg():
+
+avg(node_load1)
+Query with max():
+
+max(node_filesystem_size_bytes)
+Subtask 4.2: Using Mathematical Operations
+Calculate percentage:
+
+(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100
+Rate calculations:
+
+rate(node_disk_read_bytes_total[5m]) + rate(node_disk_written_bytes_total[5m])
+Subtask 4.3: Using Label Matching
+Exact match:
+
+node_filesystem_size_bytes{mountpoint="/"}
+Regex match:
+
+node_filesystem_size_bytes{device=~"/dev/sd.*"}
+Negative match:
+
+node_network_receive_bytes_total{device!="lo"}
+Subtask 4.4: Time Range Functions
+Using range vectors:
+
+rate(node_cpu_seconds_total[5m])
+Using offset:
+
+node_load1 offset 1h
+Using increase:
+
+increase(node_network_receive_bytes_total[1h])
+Task 5: Creating Alert Rules (Optional Advanced Exercise)
+Subtask 5.1: Create Alert Rules File
+Create an alert rules file:
+
+sudo tee /etc/prometheus/alert_rules.yml > /dev/null <<EOF
+groups:
+- name: system_alerts
+  rules:
+  - alert: HighCPUUsage
+    expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High CPU usage detected"
+      description: "CPU usage is above 80% for more than 2 minutes"
+
+  - alert: HighMemoryUsage
+    expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High memory usage detected"
+      description: "Memory usage is above 85% for more than 2 minutes"
+
+  - alert: DiskSpaceLow
+    expr: 100 - ((node_filesystem_avail_bytes{mountpoint="/",fstype!="rootfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!="rootfs"}) * 100) > 90
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Disk space is running low"
+      description: "Disk usage is above 90%"
+EOF
+
+sudo chown prometheus:prometheus /etc/prometheus/alert_rules.yml
+Subtask 5.2: Update Prometheus Configuration
+Update the Prometheus configuration to include alert rules:
+
+sudo tee /etc/prometheus/prometheus.yml > /dev/null <<EOF
+global:
+  scrape_interval: 15s
+
+rule_files:
+  - "alert_rules.yml"
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+  
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['localhost:9100']
+EOF
+
+sudo systemctl restart prometheus
+Troubleshooting Tips
+Common Issues and Solutions
+Issue 1: Services not starting
+
+# Check service status
+sudo systemctl status prometheus
+sudo systemctl status node_exporter
+sudo systemctl status grafana-server
+
+# Check logs
+sudo journalctl -u prometheus -f
+sudo journalctl -u node_exporter -f
+sudo journalctl -u grafana-server -f
+Issue 2: Cannot access web interfaces
+
+# Check if ports are listening
+sudo netstat -tlnp | grep :9090
+sudo netstat -tlnp | grep :3000
+sudo netstat -tlnp | grep :9100
+
+# Check firewall (if enabled)
+sudo ufw status
+Issue 3: No data in Grafana
+
+Verify Prometheus data source configuration
+Check that Node Exporter is running and accessible
+Ensure PromQL queries are syntactically correct
+Issue 4: PromQL query errors
+
+Use the Prometheus web interface to test queries first
+Check metric names using the metrics browser
+Verify label names and values
+Verification Steps
+Verify Prometheus Installation
+Access Prometheus at http://localhost:9090
+Go to Status > Targets - all targets should be UP
+Go to Graph and try a simple query: up
+Verify Node Exporter
+Access http://localhost:9100/metrics directly
+You should see a long list of metrics
+In Prometheus, query: node_load1
+Verify Grafana Integration
+Access Grafana at http://localhost:3000
+Check data source connectivity
+Create a simple panel with query: up
+Verify data is displayed correctly
+Conclusion
+In this lab, you have successfully:
+
+Installed and configured a complete monitoring stack with Prometheus, Node Exporter, and Grafana
+Learned PromQL fundamentals including basic queries, functions, and operators
+Created system monitoring queries for CPU, memory, disk, and network metrics
+Built interactive dashboards in Grafana using the Query Editor
+Applied advanced PromQL techniques including aggregation functions and time-based calculations
+Implemented monitoring best practices with proper metric visualization
+Why This Matters:
+
+Understanding PromQL and Grafana is crucial for modern DevOps and system administration. These skills enable you to:
+
+Monitor system health proactively and identify issues before they impact users
+Create meaningful visualizations that help teams understand system performance
+Build alerting systems that notify you of critical issues automatically
+Analyze trends and capacity planning for infrastructure scaling
+Troubleshoot problems more effectively with historical data and real-time metrics
+The combination of Prometheus and Grafana provides a powerful, open-source monitoring solution used by organizations worldwide. The PromQL skills you've developed are directly applicable to production environments and will serve as a foundation for more advanced monitoring and observability practices.
+
+Continue practicing with different metrics and query patterns to deepen your understanding of time-series data analysis and system monitoring.
