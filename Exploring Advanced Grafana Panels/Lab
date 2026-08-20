@@ -1,0 +1,693 @@
+Exploring Advanced Grafana Panels
+Lab Objectives
+By the end of this lab, students will be able to:
+
+Install and configure Grafana on a Linux machine
+Set up Prometheus as a data source for advanced visualizations
+Create and configure heatmap panels to visualize time-series data patterns
+Build histogram panels to display data distribution
+Customize advanced panel settings for optimal data presentation
+Apply best practices for advanced Grafana visualizations
+Troubleshoot common issues with complex panel configurations
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux command line operations
+Familiarity with basic Grafana concepts and interface
+Knowledge of time-series data and metrics
+Understanding of basic statistical concepts (distributions, percentiles)
+Experience with web browsers and basic networking concepts
+Lab Environment Setup
+Note: Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated Linux machine. The provided machine is bare metal with no pre-installed tools, so you will install all required software during this lab exercise.
+
+All tasks in this lab will be performed on a single Linux machine. No additional virtual machines or remote hosts are required.
+
+Task 1: Environment Preparation and Tool Installation
+Subtask 1.1: Update System and Install Dependencies
+First, update your system and install necessary dependencies:
+
+# Update package repositories
+sudo apt update && sudo apt upgrade -y
+
+# Install required dependencies
+sudo apt install -y wget curl software-properties-common apt-transport-https ca-certificates gnupg lsb-release
+
+# Install Docker for containerized services
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+# Add current user to docker group
+sudo usermod -aG docker $USER
+newgrp docker
+
+# Verify Docker installation
+docker --version
+Subtask 1.2: Install and Configure Prometheus
+Create a Prometheus configuration to generate sample metrics:
+
+# Create directory for Prometheus configuration
+mkdir -p ~/grafana-lab/prometheus
+cd ~/grafana-lab/prometheus
+
+# Create Prometheus configuration file
+cat > prometheus.yml << 'EOF'
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+  
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['localhost:9100']
+    scrape_interval: 5s
+    metrics_path: /metrics
+EOF
+
+# Start Prometheus using Docker
+docker run -d \
+  --name prometheus \
+  -p 9090:9090 \
+  -v ~/grafana-lab/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml \
+  prom/prometheus:latest \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --storage.tsdb.path=/prometheus \
+  --web.console.libraries=/etc/prometheus/console_libraries \
+  --web.console.templates=/etc/prometheus/consoles \
+  --storage.tsdb.retention.time=200h \
+  --web.enable-lifecycle
+Subtask 1.3: Install Node Exporter for System Metrics
+# Start Node Exporter to generate system metrics
+docker run -d \
+  --name node-exporter \
+  -p 9100:9100 \
+  --net="host" \
+  --pid="host" \
+  -v "/:/host:ro,rslave" \
+  prom/node-exporter:latest \
+  --path.rootfs=/host
+Subtask 1.4: Install and Configure Grafana
+# Start Grafana using Docker
+docker run -d \
+  --name grafana \
+  -p 3000:3000 \
+  -e "GF_SECURITY_ADMIN_PASSWORD=admin123" \
+  -v grafana-storage:/var/lib/grafana \
+  grafana/grafana:latest
+
+# Wait for services to start
+echo "Waiting for services to start..."
+sleep 30
+
+# Verify all services are running
+docker ps
+Subtask 1.5: Access Grafana and Configure Data Source
+# Check if Grafana is accessible
+curl -s http://localhost:3000/api/health
+Open your web browser and navigate to http://localhost:3000
+
+Username: admin
+Password: admin123
+Configure Prometheus as a data source:
+
+Click on Configuration (gear icon) in the left sidebar
+Select Data Sources
+Click Add data source
+Select Prometheus
+Set URL to: http://localhost:9090
+Click Save & Test
+Task 2: Creating Advanced Heatmap Visualizations
+Subtask 2.1: Create a New Dashboard for Advanced Panels
+Click the + icon in the left sidebar
+Select Dashboard
+Click Add new panel
+In the dashboard settings, set the title to Advanced Grafana Panels Lab
+Subtask 2.2: Configure CPU Usage Heatmap
+Create a heatmap to visualize CPU usage patterns over time:
+
+Panel Configuration:
+
+Panel Title: CPU Usage Heatmap
+Visualization Type: Heatmap
+Query Configuration:
+
+rate(node_cpu_seconds_total{mode!="idle"}[5m]) * 100
+Heatmap Settings:
+
+Y-Axis:
+Unit: Percent (0-100)
+Min: 0
+Max: 100
+Buckets:
+Y-Axis buckets: 20
+X-Axis buckets: Auto
+Color Scheme:
+Select Spectrum
+Base color: Blue
+Exponent: 0.5
+Advanced Options:
+
+Data format: Time series buckets
+Reverse buckets: Disabled
+Hide zero buckets: Enabled
+Subtask 2.3: Create Memory Usage Heatmap
+Add another heatmap panel for memory usage:
+
+Click Add panel and select Add new panel
+
+Panel Configuration:
+
+Panel Title: Memory Usage Heatmap
+Visualization Type: Heatmap
+Query Configuration:
+
+(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100
+Heatmap Settings:
+
+Y-Axis:
+Unit: Percent (0-100)
+Min: 0
+Max: 100
+Color Scheme:
+Select Green-Yellow-Red (by value)
+Exponent: 1.0
+Subtask 2.4: Configure Network Traffic Heatmap
+Create a heatmap for network traffic patterns:
+
+Add another new panel
+
+Panel Configuration:
+
+Panel Title: Network Traffic Heatmap
+Visualization Type: Heatmap
+Query Configuration:
+
+rate(node_network_receive_bytes_total{device!="lo"}[5m]) + rate(node_network_transmit_bytes_total{device!="lo"}[5m])
+Heatmap Settings:
+
+Y-Axis:
+Unit: Bytes/sec
+Scale: Linear
+Color Scheme:
+Select Blues
+Exponent: 0.5
+Task 3: Building Advanced Histogram Panels
+Subtask 3.1: Create HTTP Response Time Histogram
+Since we need histogram data, let's first generate some sample histogram metrics:
+
+# Create a simple Python script to generate histogram metrics
+mkdir -p ~/grafana-lab/metrics-generator
+cd ~/grafana-lab/metrics-generator
+
+cat > histogram_generator.py << 'EOF'
+#!/usr/bin/env python3
+import time
+import random
+import http.server
+import socketserver
+from prometheus_client import Histogram, start_http_server, generate_latest, CONTENT_TYPE_LATEST
+
+# Create histogram metrics
+REQUEST_DURATION = Histogram('http_request_duration_seconds', 'HTTP request duration in seconds', buckets=[0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0])
+RESPONSE_SIZE = Histogram('http_response_size_bytes', 'HTTP response size in bytes', buckets=[100, 500, 1000, 5000, 10000, 50000])
+
+class MetricsHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/metrics':
+            self.send_response(200)
+            self.send_header('Content-Type', CONTENT_TYPE_LATEST)
+            self.end_headers()
+            self.wfile.write(generate_latest())
+        else:
+            # Simulate request processing
+            duration = random.uniform(0.1, 5.0)
+            size = random.randint(100, 10000)
+            
+            REQUEST_DURATION.observe(duration)
+            RESPONSE_SIZE.observe(size)
+            
+            time.sleep(duration / 100)  # Simulate processing time
+            
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(f'Request processed in {duration:.2f}s, size: {size} bytes\n'.encode())
+
+if __name__ == '__main__':
+    # Generate some initial data
+    for _ in range(100):
+        REQUEST_DURATION.observe(random.uniform(0.1, 5.0))
+        RESPONSE_SIZE.observe(random.randint(100, 10000))
+    
+    print("Starting metrics server on port 8000...")
+    with socketserver.TCPServer(("", 8000), MetricsHandler) as httpd:
+        httpd.serve_forever()
+EOF
+
+# Install Python and required packages
+sudo apt install -y python3 python3-pip
+pip3 install prometheus_client
+
+# Start the metrics generator
+python3 histogram_generator.py &
+METRICS_PID=$!
+echo $METRICS_PID > metrics_generator.pid
+
+# Update Prometheus configuration to scrape our custom metrics
+cd ~/grafana-lab/prometheus
+cat > prometheus.yml << 'EOF'
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+  
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['localhost:9100']
+    scrape_interval: 5s
+  
+  - job_name: 'custom-metrics'
+    static_configs:
+      - targets: ['localhost:8000']
+    scrape_interval: 10s
+EOF
+
+# Restart Prometheus with new configuration
+docker restart prometheus
+
+# Generate some traffic to create histogram data
+for i in {1..50}; do
+  curl -s http://localhost:8000/test > /dev/null &
+done
+wait
+
+echo "Histogram data generation started. Wait 2 minutes for data to accumulate..."
+sleep 120
+Subtask 3.2: Configure HTTP Request Duration Histogram Panel
+Add a new panel to your dashboard
+
+Panel Configuration:
+
+Panel Title: HTTP Request Duration Distribution
+Visualization Type: Histogram
+Query Configuration:
+
+histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))
+Histogram Settings:
+
+Y-Axis:
+Unit: Seconds
+Scale: Linear
+Buckets: 20
+Display:
+Show buckets: Enabled
+Show values: Enabled
+Subtask 3.3: Create Response Size Histogram
+Add another histogram panel
+
+Panel Configuration:
+
+Panel Title: HTTP Response Size Distribution
+Visualization Type: Histogram
+Query Configuration:
+
+histogram_quantile(0.90, rate(http_response_size_bytes_bucket[5m]))
+Histogram Settings:
+
+Y-Axis:
+Unit: Bytes
+Scale: Linear
+Buckets: 15
+Color: Blue gradient
+Subtask 3.4: Advanced Histogram with Multiple Quantiles
+Create a more complex histogram showing multiple percentiles:
+
+Add a new panel
+
+Panel Configuration:
+
+Panel Title: Request Duration Percentiles
+Visualization Type: Time series
+Multiple Queries:
+
+Query A (P50):
+
+histogram_quantile(0.50, rate(http_request_duration_seconds_bucket[5m]))
+Query B (P90):
+
+histogram_quantile(0.90, rate(http_request_duration_seconds_bucket[5m]))
+Query C (P95):
+
+histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))
+Query D (P99):
+
+histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))
+Legend Configuration:
+
+Query A Legend: 50th percentile
+Query B Legend: 90th percentile
+Query C Legend: 95th percentile
+Query D Legend: 99th percentile
+Task 4: Customizing and Optimizing Advanced Visualizations
+Subtask 4.1: Optimize Heatmap Display Settings
+For each heatmap panel, apply these optimizations:
+
+Color Optimization:
+
+Access panel edit mode
+Go to Field tab
+Under Standard options:
+Set Min: 0
+Set Max: Auto
+Under Color scheme:
+Choose appropriate color palette
+Adjust Exponent for better contrast
+Tooltip Configuration:
+
+Go to Panel options
+Enable Tooltip
+Set Mode: All series
+Enable Sort: Ascending
+Axis Optimization:
+
+Y-Axis:
+Set appropriate Unit
+Configure Scale (Linear/Log)
+Set Min/Max values
+X-Axis:
+Time format: Auto
+Show labels: Enabled
+Subtask 4.2: Enhance Histogram Visualizations
+Apply these enhancements to histogram panels:
+
+Bucket Configuration:
+
+# Access panel settings and configure:
+# - Bucket size: Optimal for data range
+# - Bucket offset: 0
+# - Y-axis: Appropriate units and scale
+Statistical Overlays:
+
+Add mean line overlay
+Add median line overlay
+Configure percentile markers
+Interactive Features:
+
+Enable Zoom: Enabled
+Enable Tooltip: All series
+Legend: Show values and percentages
+Subtask 4.3: Create Advanced Panel Layouts
+Organize panels for optimal viewing:
+
+Dashboard Layout:
+
+Arrange heatmaps in top row
+Place histograms in bottom row
+Adjust panel sizes for optimal viewing
+Time Range Synchronization:
+
+Set dashboard time range to Last 1 hour
+Enable Auto-refresh: 30 seconds
+Synchronize all panels to same time range
+Panel Linking:
+
+Configure drill-down capabilities
+Set up cross-panel filtering
+Enable time range selection
+Subtask 4.4: Advanced Customization Features
+Apply advanced customization to enhance user experience:
+
+Conditional Formatting:
+
+{
+  "conditions": [
+    {
+      "evaluator": {
+        "params": [80],
+        "type": "gt"
+      },
+      "operator": {
+        "type": "and"
+      },
+      "query": {
+        "params": ["A", "5m", "now"]
+      },
+      "reducer": {
+        "params": [],
+        "type": "last"
+      },
+      "type": "query"
+    }
+  ],
+  "executionErrorState": "alerting",
+  "for": "5m",
+  "frequency": "10s",
+  "handler": 1,
+  "name": "High CPU Usage Alert",
+  "noDataState": "no_data",
+  "notifications": []
+}
+Custom Color Schemes:
+
+Create custom color palettes
+Apply threshold-based coloring
+Configure gradient transitions
+Advanced Tooltips:
+
+Multi-series tooltips
+Custom formatting
+Statistical summaries
+Task 5: Testing and Validation
+Subtask 5.1: Generate Test Data
+Create additional test data to validate visualizations:
+
+# Generate varied load patterns
+cd ~/grafana-lab/metrics-generator
+
+cat > load_generator.sh << 'EOF'
+#!/bin/bash
+
+echo "Generating varied load patterns..."
+
+# Generate CPU load
+stress-ng --cpu 2 --timeout 60s &
+
+# Generate network traffic
+for i in {1..100}; do
+  curl -s http://localhost:8000/test$(($RANDOM % 1000)) > /dev/null &
+  sleep 0.1
+done
+
+# Generate memory pressure
+stress-ng --vm 1 --vm-bytes 512M --timeout 30s &
+
+wait
+echo "Load generation complete"
+EOF
+
+# Install stress-ng for load generation
+sudo apt install -y stress-ng
+
+# Make script executable and run
+chmod +x load_generator.sh
+./load_generator.sh
+Subtask 5.2: Validate Heatmap Functionality
+Data Verification:
+
+Verify heatmaps show color gradients
+Check time progression on X-axis
+Validate value ranges on Y-axis
+Interactive Testing:
+
+Test zoom functionality
+Verify tooltip information
+Check legend accuracy
+Performance Validation:
+
+Monitor panel load times
+Check data refresh rates
+Validate memory usage
+Subtask 5.3: Validate Histogram Functionality
+Distribution Verification:
+
+Check bucket distributions
+Verify percentile calculations
+Validate statistical accuracy
+Visual Validation:
+
+Confirm bar heights represent data accurately
+Check color coding consistency
+Verify axis scaling
+Subtask 5.4: Performance Testing
+Test dashboard performance under load:
+
+# Create performance test script
+cat > performance_test.sh << 'EOF'
+#!/bin/bash
+
+echo "Starting performance test..."
+
+# Generate continuous load
+for i in {1..300}; do
+  curl -s http://localhost:8000/load-test-$i > /dev/null &
+  if [ $((i % 10)) -eq 0 ]; then
+    sleep 1
+  fi
+done
+
+# Monitor system resources
+echo "Monitoring system performance..."
+top -b -n 5 | grep -E "(Cpu|Mem|grafana|prometheus)"
+
+wait
+echo "Performance test complete"
+EOF
+
+chmod +x performance_test.sh
+./performance_test.sh
+Troubleshooting Common Issues
+Issue 1: Heatmap Not Displaying Data
+Symptoms: Empty heatmap panels or no color gradients
+
+Solutions:
+
+# Check Prometheus targets
+curl http://localhost:9090/api/v1/targets
+
+# Verify data availability
+curl "http://localhost:9090/api/v1/query?query=up"
+
+# Check Grafana data source connection
+curl -u admin:admin123 http://localhost:3000/api/datasources
+Issue 2: Histogram Buckets Not Showing
+Symptoms: Histogram panels show no buckets or incorrect distributions
+
+Solutions:
+
+# Verify histogram metrics are available
+curl http://localhost:8000/metrics | grep histogram
+
+# Check bucket configuration in Prometheus
+curl "http://localhost:9090/api/v1/query?query=http_request_duration_seconds_bucket"
+
+# Restart metrics generator if needed
+kill $(cat ~/grafana-lab/metrics-generator/metrics_generator.pid)
+cd ~/grafana-lab/metrics-generator
+python3 histogram_generator.py &
+echo $! > metrics_generator.pid
+Issue 3: Performance Issues
+Symptoms: Slow panel loading or high resource usage
+
+Solutions:
+
+# Check Docker container resources
+docker stats
+
+# Optimize Prometheus retention
+docker exec prometheus promtool query instant 'prometheus_tsdb_head_series'
+
+# Reduce scrape intervals if needed
+# Edit prometheus.yml and restart container
+Issue 4: Color Scheme Issues
+Symptoms: Poor color contrast or visibility
+
+Solutions:
+
+Access panel Field settings
+Adjust Color scheme selection
+Modify Exponent values for better contrast
+Set appropriate Min/Max thresholds
+Lab Validation and Testing
+Final Validation Checklist
+Verify the following components are working correctly:
+
+ Heatmap Panels:
+
+ CPU usage heatmap displays color gradients
+ Memory usage heatmap shows data patterns
+ Network traffic heatmap visualizes traffic patterns
+ All heatmaps have proper axis labels and units
+ Histogram Panels:
+
+ HTTP request duration histogram shows distribution
+ Response size histogram displays bucket data
+ Multi-percentile panel shows different quantiles
+ All histograms have appropriate bucket sizes
+ Dashboard Functionality:
+
+ All panels refresh automatically
+ Time range selection works across panels
+ Tooltips provide accurate information
+ Zoom functionality works properly
+ Data Sources:
+
+ Prometheus connection is stable
+ Metrics are being collected continuously
+ Custom histogram metrics are available
+ Node exporter provides system metrics
+Performance Verification
+# Final system check
+echo "=== Final System Status ==="
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+echo -e "\n=== Service Health Checks ==="
+curl -s http://localhost:3000/api/health | jq '.'
+curl -s http://localhost:9090/-/healthy
+curl -s http://localhost:9100/metrics | head -5
+curl -s http://localhost:8000/metrics | grep -c "http_request_duration_seconds"
+
+echo -e "\n=== Resource Usage ==="
+docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"
+Cleanup Instructions
+When you're finished with the lab, clean up resources:
+
+# Stop and remove containers
+docker stop grafana prometheus node-exporter
+docker rm grafana prometheus node-exporter
+
+# Stop metrics generator
+if [ -f ~/grafana-lab/metrics-generator/metrics_generator.pid ]; then
+  kill $(cat ~/grafana-lab/metrics-generator/metrics_generator.pid)
+  rm ~/grafana-lab/metrics-generator/metrics_generator.pid
+fi
+
+# Remove Docker volumes (optional)
+docker volume rm grafana-storage
+
+# Clean up lab directory (optional)
+rm -rf ~/grafana-lab
+Conclusion
+In this comprehensive lab, you have successfully:
+
+Installed and configured a complete monitoring stack with Grafana, Prometheus, and Node Exporter
+Created advanced heatmap visualizations to display time-series data patterns including CPU usage, memory consumption, and network traffic
+Built sophisticated histogram panels to visualize data distributions and percentiles
+Implemented custom metrics generation to provide realistic histogram data for testing
+Applied advanced customization techniques including color schemes, tooltips, and interactive features
+Optimized panel performance and layout for professional dashboard presentation
+Validated functionality through comprehensive testing and troubleshooting
+These advanced Grafana visualization techniques are essential for:
+
+Performance monitoring in production environments
+Capacity planning and resource optimization
+Anomaly detection through pattern recognition
+Statistical analysis of system behavior
+Professional dashboard creation for stakeholders
+The skills you've developed in this lab will enable you to create sophisticated monitoring dashboards that provide deep insights into system performance and behavior patterns. These visualizations are particularly valuable for DevOps teams, system administrators, and anyone responsible for maintaining complex technical systems.
+
+The combination of heatmaps and histograms provides powerful tools for understanding both temporal patterns and statistical distributions in your data, making them indispensable for modern observability practices.
