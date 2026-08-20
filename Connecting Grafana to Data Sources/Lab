@@ -1,0 +1,382 @@
+Connecting Grafana to Data Sources
+Lab Objectives
+By the end of this lab, you will be able to:
+
+Install and configure Prometheus as a time-series monitoring system
+Install and configure InfluxDB as a time-series database
+Connect Grafana to both Prometheus and InfluxDB data sources
+Test and verify data source connections in Grafana
+Understand the differences between various data source types
+Configure basic data queries from multiple sources
+Prerequisites
+Before starting this lab, you should have:
+
+Basic knowledge of Linux command line operations
+Understanding of fundamental networking concepts (ports, localhost)
+Familiarity with text editors like nano or vim
+Basic understanding of databases and monitoring concepts
+Completion of previous Grafana installation labs (or equivalent knowledge)
+Lab Environment
+Al Nafi provides you with a ready-to-use Linux-based cloud machine. Simply click Start Lab to access your environment. The provided Linux machine is bare metal with no pre-installed tools, so you will install all required software during this lab. All tasks will be performed on this single machine.
+
+Task 1: Install and Configure Prometheus
+Subtask 1.1: Download and Install Prometheus
+First, let's create a dedicated user for Prometheus and download the latest version.
+
+# Create prometheus user
+sudo useradd --no-create-home --shell /bin/false prometheus
+
+# Create directories for Prometheus
+sudo mkdir /etc/prometheus
+sudo mkdir /var/lib/prometheus
+
+# Set ownership
+sudo chown prometheus:prometheus /etc/prometheus
+sudo chown prometheus:prometheus /var/lib/prometheus
+
+# Download Prometheus (version 2.47.0 - current stable)
+cd /tmp
+wget https://github.com/prometheus/prometheus/releases/download/v2.47.0/prometheus-2.47.0.linux-amd64.tar.gz
+
+# Extract the archive
+tar xvf prometheus-2.47.0.linux-amd64.tar.gz
+cd prometheus-2.47.0.linux-amd64
+Subtask 1.2: Install Prometheus Binaries
+# Copy binaries to system directories
+sudo cp prometheus /usr/local/bin/
+sudo cp promtool /usr/local/bin/
+
+# Set ownership for binaries
+sudo chown prometheus:prometheus /usr/local/bin/prometheus
+sudo chown prometheus:prometheus /usr/local/bin/promtool
+
+# Copy configuration files
+sudo cp -r consoles /etc/prometheus
+sudo cp -r console_libraries /etc/prometheus
+
+# Set ownership for configuration directories
+sudo chown -R prometheus:prometheus /etc/prometheus/consoles
+sudo chown -R prometheus:prometheus /etc/prometheus/console_libraries
+Subtask 1.3: Create Prometheus Configuration
+Create the main configuration file for Prometheus:
+
+sudo nano /etc/prometheus/prometheus.yml
+Add the following configuration:
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+  
+  - job_name: 'node_exporter'
+    static_configs:
+      - targets: ['localhost:9100']
+Set proper ownership:
+
+sudo chown prometheus:prometheus /etc/prometheus/prometheus.yml
+Subtask 1.4: Create Prometheus Service
+Create a systemd service file:
+
+sudo nano /etc/systemd/system/prometheus.service
+Add the following content:
+
+[Unit]
+Description=Prometheus
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=prometheus
+Group=prometheus
+Type=simple
+ExecStart=/usr/local/bin/prometheus \
+    --config.file /etc/prometheus/prometheus.yml \
+    --storage.tsdb.path /var/lib/prometheus/ \
+    --web.console.templates=/etc/prometheus/consoles \
+    --web.console.libraries=/etc/prometheus/console_libraries \
+    --web.listen-address=0.0.0.0:9090 \
+    --web.enable-lifecycle
+
+[Install]
+WantedBy=multi-user.target
+Subtask 1.5: Start Prometheus Service
+# Reload systemd and start Prometheus
+sudo systemctl daemon-reload
+sudo systemctl enable prometheus
+sudo systemctl start prometheus
+
+# Check service status
+sudo systemctl status prometheus
+
+# Verify Prometheus is running
+curl http://localhost:9090/metrics
+Task 2: Install and Configure InfluxDB
+Subtask 2.1: Install InfluxDB
+Add the InfluxDB repository and install:
+
+# Add InfluxDB repository key
+wget -qO- https://repos.influxdata.com/influxdb.key | sudo apt-key add -
+
+# Add repository
+echo "deb https://repos.influxdata.com/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/influxdb.list
+
+# Update package list
+sudo apt update
+
+# Install InfluxDB
+sudo apt install influxdb -y
+Subtask 2.2: Configure InfluxDB
+Edit the InfluxDB configuration file:
+
+sudo nano /etc/influxdb/influxdb.conf
+Find and modify these sections (uncomment and set values):
+
+[http]
+  enabled = true
+  bind-address = ":8086"
+  auth-enabled = false
+  log-enabled = true
+  write-tracing = false
+  pprof-enabled = true
+  debug-pprof-enabled = false
+  https-enabled = false
+Subtask 2.3: Start InfluxDB Service
+# Enable and start InfluxDB
+sudo systemctl enable influxdb
+sudo systemctl start influxdb
+
+# Check service status
+sudo systemctl status influxdb
+
+# Verify InfluxDB is running
+curl -i http://localhost:8086/ping
+Subtask 2.4: Create Sample Database and Data
+# Access InfluxDB CLI
+influx
+
+# Create a database
+CREATE DATABASE grafana_lab
+
+# Use the database
+USE grafana_lab
+
+# Insert sample data
+INSERT cpu_usage,host=server1,region=us-west value=80.5
+INSERT cpu_usage,host=server2,region=us-east value=65.2
+INSERT memory_usage,host=server1,region=us-west value=75.8
+INSERT memory_usage,host=server2,region=us-east value=82.1
+
+# Verify data insertion
+SELECT * FROM cpu_usage
+SELECT * FROM memory_usage
+
+# Exit InfluxDB CLI
+exit
+Task 3: Install and Configure Grafana
+Subtask 3.1: Install Grafana
+# Add Grafana repository
+sudo apt-get install -y software-properties-common
+wget -q -O - https://packages.grafana.com/gpg.key | sudo apt-key add -
+echo "deb https://packages.grafana.com/oss/deb stable main" | sudo tee -a /etc/apt/sources.list.d/grafana.list
+
+# Update and install Grafana
+sudo apt-get update
+sudo apt-get install grafana -y
+
+# Enable and start Grafana
+sudo systemctl enable grafana-server
+sudo systemctl start grafana-server
+
+# Check service status
+sudo systemctl status grafana-server
+Subtask 3.2: Access Grafana Web Interface
+# Verify Grafana is accessible
+curl http://localhost:3000
+
+# Get your machine's IP address for browser access
+ip addr show | grep inet
+Open your web browser and navigate to http://localhost:3000 (or your machine's IP address with port 3000).
+
+Default login credentials:
+
+Username: admin
+Password: admin
+You will be prompted to change the password on first login.
+
+Task 4: Connect Grafana to Prometheus
+Subtask 4.1: Add Prometheus Data Source
+In Grafana web interface, click on Configuration (gear icon) in the left sidebar
+Select Data Sources
+Click Add data source
+Select Prometheus from the list
+Subtask 4.2: Configure Prometheus Connection
+Fill in the following details:
+
+Name: Prometheus
+URL: http://localhost:9090
+Access: Server (default)
+HTTP Method: GET
+Leave other settings as default.
+
+Subtask 4.3: Test Prometheus Connection
+Scroll down and click Save & Test
+You should see a green message: "Data source is working"
+If the test fails, verify:
+
+# Check if Prometheus is running
+sudo systemctl status prometheus
+
+# Check if port 9090 is listening
+sudo netstat -tlnp | grep 9090
+
+# Test direct access
+curl http://localhost:9090/api/v1/query?query=up
+Task 5: Connect Grafana to InfluxDB
+Subtask 5.1: Add InfluxDB Data Source
+In Grafana, go to Configuration > Data Sources
+Click Add data source
+Select InfluxDB from the list
+Subtask 5.2: Configure InfluxDB Connection
+Fill in the following details:
+
+Name: InfluxDB
+URL: http://localhost:8086
+Access: Server (default)
+Database: grafana_lab
+User: (leave empty for this lab)
+Password: (leave empty for this lab)
+Subtask 5.3: Test InfluxDB Connection
+Click Save & Test
+You should see a green message: "Data source is working"
+If the test fails, verify:
+
+# Check if InfluxDB is running
+sudo systemctl status influxdb
+
+# Check if port 8086 is listening
+sudo netstat -tlnp | grep 8086
+
+# Test direct access
+curl -i http://localhost:8086/ping
+
+# Verify database exists
+influx -execute "SHOW DATABASES"
+Task 6: Test Data Source Connections
+Subtask 6.1: Create Test Dashboard for Prometheus
+Click + (plus icon) in the left sidebar
+Select Dashboard
+Click Add new panel
+In the Query section:
+Select Prometheus as data source
+Enter query: up
+Click Apply
+Save the dashboard as "Test Dashboard"
+Subtask 6.2: Add InfluxDB Panel
+In the same dashboard, click Add panel
+Select InfluxDB as data source
+In the query builder:
+FROM: cpu_usage
+SELECT: field(value)
+GROUP BY: tag(host)
+Click Apply
+Subtask 6.3: Verify Data Visualization
+You should now see:
+
+A panel showing Prometheus "up" metrics
+A panel showing CPU usage data from InfluxDB
+Subtask 6.4: Test Query Functionality
+Test some additional queries:
+
+For Prometheus:
+
+# Check Prometheus targets
+prometheus_notifications_total
+
+# Check scrape duration
+prometheus_target_scrape_duration_seconds
+For InfluxDB:
+
+SELECT mean("value") FROM "cpu_usage" WHERE time >= now() - 1h GROUP BY time(5m), "host"
+Troubleshooting Common Issues
+Prometheus Connection Issues
+# Check Prometheus logs
+sudo journalctl -u prometheus -f
+
+# Verify configuration syntax
+sudo /usr/local/bin/promtool check config /etc/prometheus/prometheus.yml
+
+# Check firewall settings
+sudo ufw status
+InfluxDB Connection Issues
+# Check InfluxDB logs
+sudo journalctl -u influxdb -f
+
+# Verify InfluxDB is responding
+curl -sl -I http://localhost:8086/ping
+
+# Check database permissions
+influx -execute "SHOW USERS"
+Grafana Connection Issues
+# Check Grafana logs
+sudo journalctl -u grafana-server -f
+
+# Verify Grafana configuration
+sudo cat /etc/grafana/grafana.ini | grep -v "^#" | grep -v "^$"
+
+# Check port availability
+sudo netstat -tlnp | grep 3000
+Verification Steps
+Step 1: Verify All Services Are Running
+# Check all services
+sudo systemctl status prometheus grafana-server influxdb
+
+# Check all ports are listening
+sudo netstat -tlnp | grep -E "(3000|8086|9090)"
+Step 2: Verify Data Sources in Grafana
+Go to Configuration > Data Sources
+Confirm both Prometheus and InfluxDB show green status
+Test each connection individually
+Step 3: Create Sample Queries
+Test these queries in Grafana's Explore section:
+
+Prometheus queries:
+
+up
+prometheus_config_last_reload_successful
+InfluxDB queries:
+
+SELECT * FROM cpu_usage
+SELECT mean(value) FROM memory_usage GROUP BY host
+Lab Conclusion
+Congratulations! You have successfully completed Lab 3: Connecting Grafana to Data Sources. In this lab, you accomplished the following:
+
+Key Achievements:
+
+Installed and configured Prometheus - You set up a complete monitoring system that can collect metrics from various targets
+Installed and configured InfluxDB - You established a time-series database capable of storing high-volume metric data
+Connected Grafana to multiple data sources - You successfully integrated both Prometheus and InfluxDB with Grafana
+Tested data source connections - You verified that data flows correctly from each source to Grafana
+Created sample visualizations - You built basic dashboards that display data from both sources
+Why This Matters:
+
+Multi-source monitoring: Real-world monitoring often requires data from multiple systems. You now know how to integrate different data sources into a unified dashboard
+Flexibility: Understanding both Prometheus (pull-based) and InfluxDB (push-based) architectures gives you options for different monitoring scenarios
+Scalability: These tools form the foundation of enterprise monitoring solutions used by organizations worldwide
+Career relevance: Skills in Grafana, Prometheus, and InfluxDB are highly sought after in DevOps, SRE, and system administration roles
+Next Steps:
+
+You're now ready to explore advanced topics such as:
+
+Creating complex dashboards with multiple panels
+Setting up alerting rules
+Implementing custom metrics collection
+Exploring advanced query languages (PromQL for Prometheus, InfluxQL for InfluxDB)
+This foundation will serve you well as you continue building comprehensive monitoring and observability solutions.
