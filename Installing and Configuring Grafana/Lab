@@ -1,0 +1,397 @@
+ Installing and Configuring Grafana
+Lab Objectives
+By the end of this lab, you will be able to:
+
+Install Grafana on a Linux server using package management
+Configure Grafana for initial setup and security
+Access the Grafana web interface and navigate the dashboard
+Connect Grafana to a local data source (Prometheus)
+Create basic visualizations and understand Grafana's core functionality
+Troubleshoot common installation and configuration issues
+Prerequisites
+Before starting this lab, you should have:
+
+Basic knowledge of Linux command line operations
+Understanding of file permissions and system services
+Familiarity with web browsers and basic networking concepts
+Knowledge of YAML configuration files
+Basic understanding of monitoring concepts and metrics
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated environment. The provided Linux machine is bare metal with no pre-installed tools, so you will install all required software during the lab exercises.
+
+Important Notes:
+
+All tasks will be performed on a single Linux machine
+You will have root/sudo access to install required packages
+The machine has internet connectivity for downloading packages
+No additional virtual machines or remote hosts are needed
+Task 1: Install Grafana on a Linux Server
+Subtask 1.1: Update System and Install Prerequisites
+First, ensure your system is up to date and install necessary dependencies.
+
+# Update package repositories
+sudo apt update && sudo apt upgrade -y
+
+# Install required packages
+sudo apt install -y software-properties-common apt-transport-https wget curl gnupg2
+Subtask 1.2: Add Grafana Repository
+Add the official Grafana repository to your system's package sources.
+
+# Add Grafana GPG key
+wget -q -O - https://packages.grafana.com/gpg.key | sudo apt-key add -
+
+# Add Grafana repository
+echo "deb https://packages.grafana.com/oss/deb stable main" | sudo tee /etc/apt/sources.list.d/grafana.list
+
+# Update package list with new repository
+sudo apt update
+Subtask 1.3: Install Grafana Server
+Install the Grafana server package and verify the installation.
+
+# Install Grafana
+sudo apt install -y grafana
+
+# Verify installation
+grafana-server --version
+
+# Check if Grafana service is available
+systemctl status grafana-server
+Subtask 1.4: Start and Enable Grafana Service
+Configure Grafana to start automatically and begin the service.
+
+# Enable Grafana to start on boot
+sudo systemctl enable grafana-server
+
+# Start Grafana service
+sudo systemctl start grafana-server
+
+# Verify service is running
+sudo systemctl status grafana-server
+
+# Check if Grafana is listening on port 3000
+sudo netstat -tlnp | grep 3000
+Task 2: Configure Grafana for First Use
+Subtask 2.1: Access Grafana Web Interface
+Open your web browser and navigate to the Grafana interface.
+
+# Check your machine's IP address
+ip addr show | grep inet
+
+# Note: Grafana runs on port 3000 by default
+# Access via: http://YOUR_IP_ADDRESS:3000
+Default Login Credentials:
+
+Username: admin
+Password: admin
+Subtask 2.2: Change Default Admin Password
+For security purposes, change the default admin password immediately.
+
+Log in with default credentials (admin/admin)
+You will be prompted to change the password
+Set a strong password and remember it
+Click Submit to save the new password
+Subtask 2.3: Configure Basic Grafana Settings
+Modify the main configuration file to customize basic settings.
+
+# Backup original configuration
+sudo cp /etc/grafana/grafana.ini /etc/grafana/grafana.ini.backup
+
+# Edit configuration file
+sudo nano /etc/grafana/grafana.ini
+Key Configuration Changes:
+
+# Under [server] section
+http_port = 3000
+domain = localhost
+root_url = http://localhost:3000
+
+# Under [security] section
+admin_user = admin
+admin_password = your_secure_password
+
+# Under [users] section
+allow_sign_up = false
+allow_org_create = false
+
+# Under [auth.anonymous] section
+enabled = false
+Subtask 2.4: Restart Grafana Service
+Apply configuration changes by restarting the service.
+
+# Restart Grafana to apply changes
+sudo systemctl restart grafana-server
+
+# Verify service is running properly
+sudo systemctl status grafana-server
+
+# Check logs for any errors
+sudo journalctl -u grafana-server -f
+Task 3: Connect to a Local Data Source
+Subtask 3.1: Install Prometheus as Data Source
+Install Prometheus to serve as a local data source for Grafana.
+
+# Create prometheus user
+sudo useradd --no-create-home --shell /bin/false prometheus
+
+# Create directories
+sudo mkdir /etc/prometheus
+sudo mkdir /var/lib/prometheus
+
+# Set ownership
+sudo chown prometheus:prometheus /etc/prometheus
+sudo chown prometheus:prometheus /var/lib/prometheus
+
+# Download Prometheus
+cd /tmp
+wget https://github.com/prometheus/prometheus/releases/download/v2.40.0/prometheus-2.40.0.linux-amd64.tar.gz
+
+# Extract and install
+tar xvf prometheus-2.40.0.linux-amd64.tar.gz
+cd prometheus-2.40.0.linux-amd64
+
+# Copy binaries
+sudo cp prometheus /usr/local/bin/
+sudo cp promtool /usr/local/bin/
+
+# Set ownership
+sudo chown prometheus:prometheus /usr/local/bin/prometheus
+sudo chown prometheus:prometheus /usr/local/bin/promtool
+
+# Copy configuration files
+sudo cp -r consoles /etc/prometheus
+sudo cp -r console_libraries /etc/prometheus
+sudo chown -R prometheus:prometheus /etc/prometheus/consoles
+sudo chown -R prometheus:prometheus /etc/prometheus/console_libraries
+Subtask 3.2: Configure Prometheus
+Create a basic Prometheus configuration file.
+
+# Create Prometheus configuration
+sudo nano /etc/prometheus/prometheus.yml
+Prometheus Configuration:
+
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+  
+  - job_name: 'node'
+    static_configs:
+      - targets: ['localhost:9100']
+# Set ownership
+sudo chown prometheus:prometheus /etc/prometheus/prometheus.yml
+Subtask 3.3: Create Prometheus Service
+Create a systemd service file for Prometheus.
+
+# Create service file
+sudo nano /etc/systemd/system/prometheus.service
+Service Configuration:
+
+[Unit]
+Description=Prometheus
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=prometheus
+Group=prometheus
+Type=simple
+ExecStart=/usr/local/bin/prometheus \
+    --config.file /etc/prometheus/prometheus.yml \
+    --storage.tsdb.path /var/lib/prometheus/ \
+    --web.console.templates=/etc/prometheus/consoles \
+    --web.console.libraries=/etc/prometheus/console_libraries
+
+[Install]
+WantedBy=multi-user.target
+Subtask 3.4: Start Prometheus Service
+Enable and start the Prometheus service.
+
+# Reload systemd
+sudo systemctl daemon-reload
+
+# Enable and start Prometheus
+sudo systemctl enable prometheus
+sudo systemctl start prometheus
+
+# Check status
+sudo systemctl status prometheus
+
+# Verify Prometheus is running
+curl http://localhost:9090/metrics
+Subtask 3.5: Install Node Exporter
+Install Node Exporter to provide system metrics.
+
+# Create node_exporter user
+sudo useradd --no-create-home --shell /bin/false node_exporter
+
+# Download Node Exporter
+cd /tmp
+wget https://github.com/prometheus/node_exporter/releases/download/v1.5.0/node_exporter-1.5.0.linux-amd64.tar.gz
+
+# Extract and install
+tar xvf node_exporter-1.5.0.linux-amd64.tar.gz
+sudo cp node_exporter-1.5.0.linux-amd64/node_exporter /usr/local/bin/
+
+# Set ownership
+sudo chown node_exporter:node_exporter /usr/local/bin/node_exporter
+Subtask 3.6: Create Node Exporter Service
+# Create service file
+sudo nano /etc/systemd/system/node_exporter.service
+Node Exporter Service Configuration:
+
+[Unit]
+Description=Node Exporter
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=node_exporter
+Group=node_exporter
+Type=simple
+ExecStart=/usr/local/bin/node_exporter
+
+[Install]
+WantedBy=multi-user.target
+# Start Node Exporter
+sudo systemctl daemon-reload
+sudo systemctl enable node_exporter
+sudo systemctl start node_exporter
+
+# Verify service
+sudo systemctl status node_exporter
+curl http://localhost:9100/metrics
+Subtask 3.7: Add Prometheus Data Source to Grafana
+Open Grafana web interface (http://localhost:3000)
+Log in with your admin credentials
+Click on Configuration (gear icon) in the left sidebar
+Select Data Sources
+Click Add data source
+Select Prometheus
+Configure the data source:
+Name: Prometheus
+URL: http://localhost:9090
+Access: Server (default)
+Click Save & Test
+Subtask 3.8: Verify Data Source Connection
+Test the connection and explore available metrics.
+
+# Verify Prometheus targets
+curl http://localhost:9090/api/v1/targets
+
+# Check available metrics
+curl http://localhost:9090/api/v1/label/__name__/values
+In Grafana:
+
+Go to Explore in the left sidebar
+Select Prometheus as the data source
+Try querying metrics like:
+up
+node_cpu_seconds_total
+node_memory_MemAvailable_bytes
+Subtask 3.9: Create a Simple Dashboard
+Create your first dashboard with basic system metrics.
+
+Click + (Create) in the left sidebar
+Select Dashboard
+Click Add new panel
+Configure the panel:
+Query: rate(node_cpu_seconds_total[5m])
+Panel Title: CPU Usage Rate
+Visualization: Time series
+Click Apply
+Save the dashboard with name "System Monitoring"
+Troubleshooting Common Issues
+Issue 1: Grafana Service Won't Start
+# Check service logs
+sudo journalctl -u grafana-server -n 50
+
+# Check configuration syntax
+sudo grafana-server -config /etc/grafana/grafana.ini -test
+
+# Verify file permissions
+ls -la /etc/grafana/
+sudo chown -R grafana:grafana /etc/grafana/
+Issue 2: Cannot Access Web Interface
+# Check if service is listening
+sudo netstat -tlnp | grep 3000
+
+# Check firewall settings
+sudo ufw status
+sudo ufw allow 3000
+
+# Verify configuration
+grep -n "http_port" /etc/grafana/grafana.ini
+Issue 3: Prometheus Connection Failed
+# Test Prometheus connectivity
+curl -I http://localhost:9090
+
+# Check Prometheus logs
+sudo journalctl -u prometheus -n 20
+
+# Verify configuration
+sudo promtool check config /etc/prometheus/prometheus.yml
+Issue 4: No Metrics Available
+# Check Node Exporter
+curl http://localhost:9100/metrics | head -20
+
+# Verify Prometheus targets
+curl http://localhost:9090/api/v1/targets | jq '.'
+
+# Check scrape configuration
+cat /etc/prometheus/prometheus.yml
+Verification Steps
+Verify Grafana Installation
+# Check Grafana version
+grafana-server --version
+
+# Verify service status
+sudo systemctl is-active grafana-server
+sudo systemctl is-enabled grafana-server
+
+# Check listening ports
+sudo ss -tlnp | grep 3000
+Verify Prometheus Setup
+# Check Prometheus status
+sudo systemctl is-active prometheus
+curl -s http://localhost:9090/-/healthy
+
+# Verify Node Exporter
+sudo systemctl is-active node_exporter
+curl -s http://localhost:9100/metrics | wc -l
+Verify Data Source Integration
+Access Grafana at http://localhost:3000
+Navigate to Configuration > Data Sources
+Verify Prometheus shows as Connected
+Test queries in Explore section
+Confirm dashboard displays metrics correctly
+Lab Summary
+In this comprehensive lab, you have successfully:
+
+Accomplished Tasks:
+
+Installed Grafana server on a Linux system using official repositories
+Configured Grafana with secure settings and custom parameters
+Set up Prometheus as a local data source for metrics collection
+Installed and configured Node Exporter for system monitoring
+Connected Grafana to Prometheus and verified data flow
+Created a basic monitoring dashboard with system metrics
+Learned troubleshooting techniques for common issues
+Key Skills Developed:
+
+System Administration: Managing services, users, and configurations
+Monitoring Setup: Understanding the relationship between data sources and visualization tools
+Security Configuration: Implementing basic security practices for monitoring systems
+Service Integration: Connecting multiple components in a monitoring stack
+Dashboard Creation: Building visualizations from time-series data
+Why This Matters: This lab provides the foundation for enterprise monitoring solutions. Grafana is widely used in production environments for:
+
+Infrastructure Monitoring: Tracking server performance and health
+Application Monitoring: Visualizing application metrics and logs
+Business Intelligence: Creating dashboards for business metrics
+Alerting Systems: Setting up notifications for critical events
+The skills learned here are directly applicable to DevOps, Site Reliability Engineering (SRE), and system administration roles. Understanding how to set up and configure monitoring tools is essential for maintaining reliable, observable systems in modern IT environments.
+
+Next Steps: With this foundation, you can explore advanced Grafana features such as alerting rules, advanced visualizations, user management, and integration with additional data sources like InfluxDB, Elasticsearch, or cloud monitoring services.
