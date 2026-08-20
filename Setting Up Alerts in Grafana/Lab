@@ -1,0 +1,688 @@
+Setting Up Alerts in Grafana
+Learning Objectives
+By the end of this lab, you will be able to:
+
+Install and configure Grafana on a Linux machine
+Set up Prometheus as a data source for monitoring metrics
+Create alerting rules based on metric thresholds
+Configure multiple alert notification channels including email and Slack
+Test alert functionality to ensure proper incident management
+Understand the fundamentals of proactive monitoring and alerting
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Linux command line operations
+Familiarity with system monitoring concepts
+Knowledge of basic networking principles
+Understanding of YAML configuration files
+Basic knowledge of HTTP and web services
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated environment. The provided Linux machine is bare metal with no pre-installed tools, so you will install all required software during the lab exercises.
+
+All tasks in this lab will be performed on a single Linux machine. No additional virtual machines or remote hosts are required.
+
+Task 1: Environment Setup and Installation
+Subtask 1.1: Update System and Install Dependencies
+First, update your system and install necessary dependencies:
+
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y wget curl software-properties-common apt-transport-https
+Subtask 1.2: Install Prometheus
+Download and install Prometheus for metrics collection:
+
+# Create prometheus user
+sudo useradd --no-create-home --shell /bin/false prometheus
+
+# Create directories
+sudo mkdir /etc/prometheus
+sudo mkdir /var/lib/prometheus
+sudo chown prometheus:prometheus /etc/prometheus
+sudo chown prometheus:prometheus /var/lib/prometheus
+
+# Download Prometheus
+cd /tmp
+wget https://github.com/prometheus/prometheus/releases/download/v2.45.0/prometheus-2.45.0.linux-amd64.tar.gz
+tar xvf prometheus-2.45.0.linux-amd64.tar.gz
+
+# Install Prometheus binaries
+sudo cp prometheus-2.45.0.linux-amd64/prometheus /usr/local/bin/
+sudo cp prometheus-2.45.0.linux-amd64/promtool /usr/local/bin/
+sudo chown prometheus:prometheus /usr/local/bin/prometheus
+sudo chown prometheus:prometheus /usr/local/bin/promtool
+
+# Copy configuration files
+sudo cp -r prometheus-2.45.0.linux-amd64/consoles /etc/prometheus
+sudo cp -r prometheus-2.45.0.linux-amd64/console_libraries /etc/prometheus
+sudo chown -R prometheus:prometheus /etc/prometheus/consoles
+sudo chown -R prometheus:prometheus /etc/prometheus/console_libraries
+Subtask 1.3: Configure Prometheus
+Create the Prometheus configuration file:
+
+sudo tee /etc/prometheus/prometheus.yml > /dev/null <<EOF
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "alert_rules.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - localhost:9093
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+  
+  - job_name: 'node'
+    static_configs:
+      - targets: ['localhost:9100']
+EOF
+
+sudo chown prometheus:prometheus /etc/prometheus/prometheus.yml
+Subtask 1.4: Create Prometheus Service
+Create a systemd service file for Prometheus:
+
+sudo tee /etc/systemd/system/prometheus.service > /dev/null <<EOF
+[Unit]
+Description=Prometheus
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=prometheus
+Group=prometheus
+Type=simple
+ExecStart=/usr/local/bin/prometheus \
+    --config.file /etc/prometheus/prometheus.yml \
+    --storage.tsdb.path /var/lib/prometheus/ \
+    --web.console.templates=/etc/prometheus/consoles \
+    --web.console.libraries=/etc/prometheus/console_libraries \
+    --web.listen-address=0.0.0.0:9090 \
+    --web.enable-lifecycle
+
+[Install]
+WantedBy=multi-user.target
+EOF
+Subtask 1.5: Install Node Exporter
+Install Node Exporter to collect system metrics:
+
+# Download Node Exporter
+cd /tmp
+wget https://github.com/prometheus/node_exporter/releases/download/v1.6.1/node_exporter-1.6.1.linux-amd64.tar.gz
+tar xvf node_exporter-1.6.1.linux-amd64.tar.gz
+
+# Install Node Exporter
+sudo cp node_exporter-1.6.1.linux-amd64/node_exporter /usr/local/bin/
+sudo chown prometheus:prometheus /usr/local/bin/node_exporter
+
+# Create Node Exporter service
+sudo tee /etc/systemd/system/node_exporter.service > /dev/null <<EOF
+[Unit]
+Description=Node Exporter
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=prometheus
+Group=prometheus
+Type=simple
+ExecStart=/usr/local/bin/node_exporter
+
+[Install]
+WantedBy=multi-user.target
+EOF
+Subtask 1.6: Install Grafana
+Add Grafana repository and install:
+
+# Add Grafana GPG key
+wget -q -O - https://packages.grafana.com/gpg.key | sudo apt-key add -
+
+# Add Grafana repository
+echo "deb https://packages.grafana.com/oss/deb stable main" | sudo tee -a /etc/apt/sources.list.d/grafana.list
+
+# Update and install Grafana
+sudo apt update
+sudo apt install -y grafana
+Subtask 1.7: Start All Services
+Enable and start all services:
+
+# Reload systemd and start services
+sudo systemctl daemon-reload
+sudo systemctl enable prometheus node_exporter grafana-server
+sudo systemctl start prometheus node_exporter grafana-server
+
+# Check service status
+sudo systemctl status prometheus
+sudo systemctl status node_exporter
+sudo systemctl status grafana-server
+Task 2: Configure Grafana Data Source and Dashboard
+Subtask 2.1: Access Grafana Web Interface
+Open your web browser and navigate to:
+
+http://localhost:3000
+Default login credentials:
+
+Username: admin
+Password: admin
+You will be prompted to change the password on first login.
+
+Subtask 2.2: Add Prometheus Data Source
+Click on Configuration (gear icon) in the left sidebar
+Select Data Sources
+Click Add data source
+Select Prometheus
+Configure the following settings:
+Name: Prometheus
+URL: http://localhost:9090
+Access: Server (default)
+Click Save & Test to verify the connection
+Subtask 2.3: Import Node Exporter Dashboard
+Click on + (plus icon) in the left sidebar
+Select Import
+Enter dashboard ID: 1860 (Node Exporter Full dashboard)
+Click Load
+Select Prometheus as the data source
+Click Import
+Task 3: Define Alerting Rules for Metric Thresholds
+Subtask 3.1: Create Alert Rules File
+Create alert rules for common system metrics:
+
+sudo tee /etc/prometheus/alert_rules.yml > /dev/null <<EOF
+groups:
+- name: system_alerts
+  rules:
+  - alert: HighCPUUsage
+    expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High CPU usage detected"
+      description: "CPU usage is above 80% for more than 2 minutes on {{ \$labels.instance }}"
+
+  - alert: HighMemoryUsage
+    expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High memory usage detected"
+      description: "Memory usage is above 85% for more than 2 minutes on {{ \$labels.instance }}"
+
+  - alert: DiskSpaceLow
+    expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100 > 90
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Disk space is running low"
+      description: "Disk usage is above 90% on {{ \$labels.instance }} filesystem {{ \$labels.mountpoint }}"
+
+  - alert: ServiceDown
+    expr: up == 0
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Service is down"
+      description: "{{ \$labels.job }} service is down on {{ \$labels.instance }}"
+EOF
+
+sudo chown prometheus:prometheus /etc/prometheus/alert_rules.yml
+Subtask 3.2: Install and Configure Alertmanager
+Download and install Alertmanager:
+
+# Create alertmanager user
+sudo useradd --no-create-home --shell /bin/false alertmanager
+
+# Create directories
+sudo mkdir /etc/alertmanager
+sudo mkdir /var/lib/alertmanager
+sudo chown alertmanager:alertmanager /etc/alertmanager
+sudo chown alertmanager:alertmanager /var/lib/alertmanager
+
+# Download Alertmanager
+cd /tmp
+wget https://github.com/prometheus/alertmanager/releases/download/v0.25.0/alertmanager-0.25.0.linux-amd64.tar.gz
+tar xvf alertmanager-0.25.0.linux-amd64.tar.gz
+
+# Install Alertmanager binaries
+sudo cp alertmanager-0.25.0.linux-amd64/alertmanager /usr/local/bin/
+sudo cp alertmanager-0.25.0.linux-amd64/amtool /usr/local/bin/
+sudo chown alertmanager:alertmanager /usr/local/bin/alertmanager
+sudo chown alertmanager:alertmanager /usr/local/bin/amtool
+Subtask 3.3: Configure Alertmanager
+Create Alertmanager configuration:
+
+sudo tee /etc/alertmanager/alertmanager.yml > /dev/null <<EOF
+global:
+  smtp_smarthost: 'localhost:587'
+  smtp_from: 'alerts@yourdomain.com'
+  smtp_auth_username: 'your-email@gmail.com'
+  smtp_auth_password: 'your-app-password'
+
+route:
+  group_by: ['alertname']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'web.hook'
+
+receivers:
+- name: 'web.hook'
+  email_configs:
+  - to: 'admin@yourdomain.com'
+    subject: 'Alert: {{ .GroupLabels.alertname }}'
+    body: |
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      {{ end }}
+
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'dev', 'instance']
+EOF
+
+sudo chown alertmanager:alertmanager /etc/alertmanager/alertmanager.yml
+Subtask 3.4: Create Alertmanager Service
+sudo tee /etc/systemd/system/alertmanager.service > /dev/null <<EOF
+[Unit]
+Description=Alertmanager
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=alertmanager
+Group=alertmanager
+Type=simple
+ExecStart=/usr/local/bin/alertmanager \
+    --config.file /etc/alertmanager/alertmanager.yml \
+    --storage.path /var/lib/alertmanager/ \
+    --web.listen-address=0.0.0.0:9093
+
+[Install]
+WantedBy=multi-user.target
+EOF
+Subtask 3.5: Start Alertmanager and Restart Prometheus
+# Enable and start Alertmanager
+sudo systemctl daemon-reload
+sudo systemctl enable alertmanager
+sudo systemctl start alertmanager
+
+# Restart Prometheus to load alert rules
+sudo systemctl restart prometheus
+
+# Check status
+sudo systemctl status alertmanager
+sudo systemctl status prometheus
+Task 4: Configure Alert Channels
+Subtask 4.1: Configure Email Notifications
+Install and configure a local mail server for testing:
+
+# Install mailutils for local mail testing
+sudo apt install -y mailutils
+
+# Test local mail delivery
+echo "Test email from Alertmanager" | mail -s "Test Alert" $USER
+Subtask 4.2: Configure Slack Integration
+To configure Slack notifications, you need to create a Slack webhook URL. Update the Alertmanager configuration:
+
+sudo tee /etc/alertmanager/alertmanager.yml > /dev/null <<EOF
+global:
+  smtp_smarthost: 'localhost:587'
+  smtp_from: 'alerts@yourdomain.com'
+
+route:
+  group_by: ['alertname']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'default-receiver'
+  routes:
+  - match:
+      severity: critical
+    receiver: 'critical-alerts'
+  - match:
+      severity: warning
+    receiver: 'warning-alerts'
+
+receivers:
+- name: 'default-receiver'
+  email_configs:
+  - to: 'admin@yourdomain.com'
+    subject: 'Alert: {{ .GroupLabels.alertname }}'
+    body: |
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      {{ end }}
+
+- name: 'critical-alerts'
+  slack_configs:
+  - api_url: 'YOUR_SLACK_WEBHOOK_URL_HERE'
+    channel: '#alerts'
+    title: 'Critical Alert'
+    text: |
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      {{ end }}
+  email_configs:
+  - to: 'admin@yourdomain.com'
+    subject: 'CRITICAL Alert: {{ .GroupLabels.alertname }}'
+    body: |
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      {{ end }}
+
+- name: 'warning-alerts'
+  email_configs:
+  - to: 'admin@yourdomain.com'
+    subject: 'Warning Alert: {{ .GroupLabels.alertname }}'
+    body: |
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      {{ end }}
+
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'instance']
+EOF
+
+sudo chown alertmanager:alertmanager /etc/alertmanager/alertmanager.yml
+sudo systemctl restart alertmanager
+Subtask 4.3: Configure Grafana Alert Notifications
+In Grafana, go to Alerting > Notification channels
+Click Add channel
+Configure Email notification:
+Name: Email Alerts
+Type: Email
+Email addresses: your-email@domain.com
+Subject: Grafana Alert - {{ .RuleName }}
+Message: Alert details: {{ .Message }}
+Click Save
+Subtask 4.4: Create Grafana Alert Rules
+Go to your Node Exporter dashboard
+Edit a panel (e.g., CPU usage panel)
+Go to the Alert tab
+Click Create Alert
+Configure the alert:
+Name: High CPU Usage
+Evaluate every: 10s
+For: 1m
+Conditions:
+WHEN: avg()
+OF: query(A, 5m, now)
+IS ABOVE: 80
+In Notifications, select your email notification channel
+Add message: "CPU usage is critically high"
+Click Save
+Task 5: Test Alerts
+Subtask 5.1: Generate CPU Load for Testing
+Create a script to generate CPU load:
+
+# Create CPU stress script
+cat > /tmp/cpu_stress.sh << 'EOF'
+#!/bin/bash
+echo "Starting CPU stress test..."
+for i in {1..4}; do
+    yes > /dev/null &
+done
+echo "CPU stress test started. PIDs: $(jobs -p)"
+echo "To stop: kill $(jobs -p)"
+EOF
+
+chmod +x /tmp/cpu_stress.sh
+Subtask 5.2: Trigger CPU Alert
+Run the CPU stress test:
+
+# Start CPU stress
+/tmp/cpu_stress.sh
+
+# Monitor CPU usage
+top -n 1 | grep "Cpu(s)"
+
+# Wait for 2-3 minutes for alert to trigger
+sleep 180
+
+# Stop CPU stress
+killall yes
+Subtask 5.3: Generate Memory Pressure
+Create memory pressure to test memory alerts:
+
+# Create memory stress script
+cat > /tmp/memory_stress.sh << 'EOF'
+#!/bin/bash
+echo "Starting memory stress test..."
+stress-ng --vm 2 --vm-bytes 75% --timeout 300s &
+echo "Memory stress test started. PID: $!"
+EOF
+
+# Install stress-ng if not available
+sudo apt install -y stress-ng
+
+chmod +x /tmp/memory_stress.sh
+
+# Run memory stress test
+/tmp/memory_stress.sh
+Subtask 5.4: Verify Alert Functionality
+Check Prometheus Alerts:
+
+Navigate to http://localhost:9090/alerts
+Verify that alerts are firing
+Check Alertmanager:
+
+Navigate to http://localhost:9093
+Verify alerts are received by Alertmanager
+Check Grafana Alerts:
+
+In Grafana, go to Alerting > Alert Rules
+Check the status of your alert rules
+Verify Notifications:
+
+Check your email for alert notifications
+Check local mail: mail
+Verify Slack notifications if configured
+Subtask 5.5: Test Alert Resolution
+Stop the stress tests and verify that alerts resolve:
+
+# Stop all stress tests
+sudo killall stress-ng
+sudo killall yes
+
+# Wait for alerts to resolve (usually 2-3 minutes)
+sleep 180
+Check that alerts change from FIRING to RESOLVED state in:
+
+Prometheus alerts page
+Alertmanager interface
+Grafana alerting dashboard
+Task 6: Advanced Alert Configuration
+Subtask 6.1: Create Custom Metrics Alert
+Add a custom alert for network traffic:
+
+sudo tee -a /etc/prometheus/alert_rules.yml > /dev/null <<EOF
+
+  - alert: HighNetworkTraffic
+    expr: rate(node_network_receive_bytes_total[5m]) > 10000000
+    for: 1m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High network traffic detected"
+      description: "Network receive traffic is above 10MB/s on {{ \$labels.instance }} interface {{ \$labels.device }}"
+EOF
+
+sudo systemctl restart prometheus
+Subtask 6.2: Configure Alert Silencing
+Test alert silencing in Alertmanager:
+
+Navigate to http://localhost:9093
+Click on an active alert
+Click Silence
+Set silence duration and reason
+Click Create
+Subtask 6.3: Create Alert Groups
+Update Alertmanager configuration for better alert grouping:
+
+sudo tee /etc/alertmanager/alertmanager.yml > /dev/null <<EOF
+global:
+  smtp_smarthost: 'localhost:587'
+  smtp_from: 'alerts@yourdomain.com'
+
+route:
+  group_by: ['cluster', 'alertname']
+  group_wait: 10s
+  group_interval: 5m
+  repeat_interval: 12h
+  receiver: 'default'
+  routes:
+  - match:
+      severity: critical
+    receiver: 'critical'
+    group_wait: 5s
+    repeat_interval: 5m
+
+receivers:
+- name: 'default'
+  email_configs:
+  - to: 'admin@yourdomain.com'
+    subject: '[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
+    body: |
+      {{ if eq .Status "firing" }}
+      🔥 FIRING ALERTS:
+      {{ range .Alerts.Firing }}
+      - {{ .Annotations.summary }}
+        {{ .Annotations.description }}
+      {{ end }}
+      {{ end }}
+      
+      {{ if eq .Status "resolved" }}
+      ✅ RESOLVED ALERTS:
+      {{ range .Alerts.Resolved }}
+      - {{ .Annotations.summary }}
+      {{ end }}
+      {{ end }}
+
+- name: 'critical'
+  email_configs:
+  - to: 'admin@yourdomain.com'
+    subject: '🚨 CRITICAL: {{ .GroupLabels.alertname }}'
+    body: |
+      CRITICAL ALERT TRIGGERED!
+      
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      Severity: {{ .Labels.severity }}
+      Instance: {{ .Labels.instance }}
+      {{ end }}
+EOF
+
+sudo systemctl restart alertmanager
+Troubleshooting Common Issues
+Issue 1: Prometheus Not Starting
+Check Prometheus configuration syntax:
+
+# Validate Prometheus configuration
+sudo -u prometheus /usr/local/bin/promtool check config /etc/prometheus/prometheus.yml
+
+# Check service logs
+sudo journalctl -u prometheus -f
+Issue 2: Alerts Not Firing
+Verify alert rule syntax:
+
+# Check alert rules
+sudo -u prometheus /usr/local/bin/promtool check rules /etc/prometheus/alert_rules.yml
+
+# Check if metrics are available
+curl http://localhost:9090/api/v1/query?query=up
+Issue 3: Email Notifications Not Working
+Test local mail configuration:
+
+# Check mail service
+sudo systemctl status postfix
+
+# Test mail delivery
+echo "Test message" | mail -s "Test" $USER
+mail
+Issue 4: Grafana Alerts Not Triggering
+Check data source connectivity in Grafana
+Verify query returns data in panel
+Check alert rule conditions
+Review Grafana logs: sudo journalctl -u grafana-server -f
+Verification and Testing
+Final Verification Checklist
+Run these commands to verify your setup:
+
+# Check all services are running
+sudo systemctl status prometheus node_exporter grafana-server alertmanager
+
+# Verify Prometheus targets
+curl -s http://localhost:9090/api/v1/targets | grep -o '"health":"[^"]*"'
+
+# Check alert rules are loaded
+curl -s http://localhost:9090/api/v1/rules | grep -o '"name":"[^"]*"'
+
+# Verify Alertmanager is receiving alerts
+curl -s http://localhost:9093/api/v1/alerts | grep -o '"status":"[^"]*"'
+
+# Test Grafana API
+curl -s http://admin:admin@localhost:3000/api/health
+Performance Verification
+Create a comprehensive test script:
+
+cat > /tmp/alert_test.sh << 'EOF'
+#!/bin/bash
+echo "=== Alert System Test ==="
+echo "1. Testing CPU alert..."
+timeout 120s yes > /dev/null &
+CPU_PID=$!
+
+echo "2. Waiting for alert to trigger (2 minutes)..."
+sleep 120
+
+echo "3. Stopping CPU stress..."
+kill $CPU_PID 2>/dev/null
+
+echo "4. Checking alert status..."
+curl -s http://localhost:9090/api/v1/alerts | grep -i "highcpuusage" || echo "No CPU alerts found"
+
+echo "5. Checking Alertmanager..."
+curl -s http://localhost:9093/api/v1/alerts | grep -c "firing" | xargs echo "Firing alerts:"
+
+echo "=== Test Complete ==="
+EOF
+
+chmod +x /tmp/alert_test.sh
+/tmp/alert_test.sh
+Conclusion
+In this comprehensive lab, you have successfully:
+
+Installed and configured a complete monitoring stack including Prometheus, Grafana, Node Exporter, and Alertmanager on a single Linux machine
+Created sophisticated alerting rules for critical system metrics including CPU usage, memory consumption, disk space, and service availability
+Configured multiple notification channels including email and Slack integration for comprehensive alert delivery
+Implemented advanced alerting features such as alert grouping, silencing, and severity-based routing
+Tested the entire alerting pipeline by generating realistic system load and verifying alert functionality
+This monitoring and alerting setup provides proactive incident management capabilities that are essential for maintaining system reliability. The skills you've developed enable you to:
+
+Detect issues before they impact users through threshold-based monitoring
+Reduce mean time to resolution with immediate notifications
+Implement escalation procedures based on alert severity
+Maintain system observability through comprehensive metrics collection
+The open-source tools you've mastered (Prometheus, Grafana, and Alertmanager) are industry-standard solutions used by organizations worldwide for monitoring and alerting. This foundation prepares you for managing production environments where proactive monitoring is critical for business continuity.
+
+Key takeaways from this lab include understanding how metrics collection, alert rule evaluation, and notification delivery work together to create a robust monitoring ecosystem. You now have the practical experience to implement similar solutions in real-world scenarios, scaling from single-machine setups to enterprise-level monitoring infrastructures.
