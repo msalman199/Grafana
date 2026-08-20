@@ -1,0 +1,255 @@
+Introduction to Grafana
+Lab Objectives
+By the end of this lab, you will be able to:
+
+Understand Grafana's architecture and core components
+Install Grafana on a Linux system using package management
+Configure and start the Grafana server service
+Navigate Grafana's web interface and explore key features
+Create your first dashboard and understand basic visualization concepts
+Configure data sources and understand how Grafana connects to data
+Prerequisites
+Before starting this lab, you should have:
+
+Basic knowledge of Linux command line operations
+Understanding of web browsers and HTTP concepts
+Familiarity with system services and package management
+Basic networking concepts (ports, localhost, IP addresses)
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated Linux machine. The provided machine is bare metal with no pre-installed tools, so you will install all required software during the lab exercises.
+
+Task 1: Install Grafana
+Subtask 1.1: Update System Packages
+First, ensure your system packages are up to date:
+
+sudo apt update
+sudo apt upgrade -y
+Subtask 1.2: Install Required Dependencies
+Install necessary packages for Grafana installation:
+
+sudo apt install -y software-properties-common apt-transport-https wget curl
+Subtask 1.3: Add Grafana Repository
+Add the official Grafana GPG key and repository:
+
+# Add GPG key
+wget -q -O - https://packages.grafana.com/gpg.key | sudo apt-key add -
+
+# Add repository
+echo "deb https://packages.grafana.com/oss/deb stable main" | sudo tee -a /etc/apt/sources.list.d/grafana.list
+Subtask 1.4: Install Grafana
+Update package list and install Grafana:
+
+sudo apt update
+sudo apt install -y grafana
+Subtask 1.5: Verify Installation
+Check if Grafana has been installed successfully:
+
+grafana-server --version
+You should see output showing the Grafana version number.
+
+Task 2: Set up Grafana Server
+Subtask 2.1: Enable Grafana Service
+Enable Grafana to start automatically on system boot:
+
+sudo systemctl enable grafana-server
+Subtask 2.2: Start Grafana Service
+Start the Grafana server service:
+
+sudo systemctl start grafana-server
+Subtask 2.3: Check Service Status
+Verify that Grafana is running properly:
+
+sudo systemctl status grafana-server
+You should see active (running) in the output, indicating the service is working correctly.
+
+Subtask 2.4: Verify Network Connectivity
+Check if Grafana is listening on the default port 3000:
+
+sudo netstat -tlnp | grep 3000
+You should see Grafana listening on port 3000.
+
+Subtask 2.5: Test Local Connection
+Test the connection to Grafana locally:
+
+curl -I http://localhost:3000
+You should receive an HTTP response indicating the server is accessible.
+
+Task 3: Explore Grafana's Web UI and Key Features
+Subtask 3.1: Access Grafana Web Interface
+Open a web browser and navigate to:
+
+http://localhost:3000
+Note: If you're using a cloud machine, you may need to use the public IP address provided by Al Nafi instead of localhost.
+
+Subtask 3.2: Initial Login
+Use the default credentials to log in:
+
+Username: admin
+Password: admin
+Grafana will prompt you to change the password. Set a new secure password for the admin account.
+
+Subtask 3.3: Explore the Main Dashboard
+After logging in, you'll see the Grafana home page. Take note of these key areas:
+
+Left sidebar: Contains navigation menu with options like Dashboards, Explore, Alerting, and Configuration
+Main content area: Displays dashboards, panels, and configuration screens
+Top navigation bar: Contains user settings, help, and organization information
+Subtask 3.4: Navigate Key Sections
+Explore the following sections in the left sidebar:
+
+Dashboards Section
+Click on Dashboards to see:
+
+Browse: View existing dashboards
+Playlists: Manage dashboard playlists
+Snapshots: Handle dashboard snapshots
+Configuration Section
+Click on Configuration (gear icon) to access:
+
+Data Sources: Configure connections to data sources
+Users: Manage user accounts
+Teams: Organize users into teams
+Plugins: Install and manage plugins
+Preferences: Set organization preferences
+Subtask 3.5: Create Your First Dashboard
+Create a simple dashboard to understand Grafana's interface:
+
+Click the + icon in the left sidebar
+
+Select Dashboard
+
+Click Add new panel
+
+In the panel editor, you'll see:
+
+Query tab: Where you configure data queries
+Visualization options: Choose chart types and styling
+Panel options: Set titles and descriptions
+For now, just add a title in the Panel options section:
+
+Title: "My First Panel"
+Click Apply to save the panel
+
+Click the Save dashboard icon (disk icon) at the top
+
+Name your dashboard "My First Dashboard" and click Save
+
+Subtask 3.6: Explore Data Source Configuration
+Even though we haven't set up a data source yet, explore the configuration:
+
+Go to Configuration > Data Sources
+
+Click Add data source
+
+Browse through the available data source types:
+
+Prometheus: For metrics monitoring
+InfluxDB: Time series database
+MySQL/PostgreSQL: Relational databases
+Elasticsearch: For log analytics
+TestData DB: Built-in test data source
+Click on TestData DB to see the configuration options
+
+Click Save & Test to add this test data source
+
+Subtask 3.7: Create a Panel with Test Data
+Now create a panel using the test data source:
+
+Go back to your dashboard by clicking Dashboards > Browse > My First Dashboard
+Click Add panel > Add new panel
+In the Query section:
+Data source: Select "TestData DB"
+Scenario: Select "Random Walk"
+You should see a line chart with random data
+In the Panel options:
+Title: "Test Data Visualization"
+Click Apply
+Save the dashboard
+Subtask 3.8: Explore Visualization Options
+Edit your test data panel to explore different visualizations:
+
+Click on the panel title and select Edit
+
+In the right panel, explore different visualization types:
+
+Time series: Line charts for time-based data
+Stat: Single value displays
+Gauge: Circular progress indicators
+Bar chart: Horizontal or vertical bars
+Table: Tabular data display
+Try changing to Stat visualization
+
+Notice how the display changes to show a single numeric value
+
+Change back to Time series and click Apply
+
+Subtask 3.9: Understanding Grafana Architecture
+Based on your exploration, Grafana's architecture consists of:
+
+Frontend: Web-based user interface for creating dashboards and visualizations
+Backend: Server that processes queries and serves the web interface
+Data Sources: External systems that provide data (databases, APIs, etc.)
+Dashboards: Collections of panels that display visualizations
+Panels: Individual visualization components within dashboards
+Plugins: Extensions that add new data sources, visualizations, or apps
+Subtask 3.10: Explore Additional Features
+Before concluding, explore these additional features:
+
+User Preferences
+Click on your user avatar in the bottom left
+Select Preferences
+Explore options for:
+UI Theme: Light or dark mode
+Home Dashboard: Set a default dashboard
+Timezone: Configure display timezone
+Help and Documentation
+Click the ? icon in the top navigation
+Explore:
+Keyboard shortcuts: Learn useful hotkeys
+Documentation: Access official Grafana docs
+Support: Get help and support information
+Troubleshooting Tips
+Common Issues and Solutions
+Issue: Grafana service fails to start Solution: Check the logs for detailed error information:
+
+sudo journalctl -u grafana-server -f
+Issue: Cannot access Grafana web interface Solution: Verify the service is running and check firewall settings:
+
+sudo systemctl status grafana-server
+sudo ufw status
+Issue: Forgot admin password Solution: Reset the admin password using the CLI:
+
+sudo grafana-cli admin reset-admin-password newpassword
+Issue: Port 3000 already in use Solution: Check what's using the port and stop it, or configure Grafana to use a different port by editing /etc/grafana/grafana.ini
+
+Lab Conclusion
+Congratulations! You have successfully completed the Introduction to Grafana lab. Here's what you accomplished:
+
+Key Achievements
+Installed Grafana: You learned how to install Grafana on a Linux system using the official repository, ensuring you have the latest stable version.
+
+Configured Grafana Server: You set up the Grafana service to run automatically and verified it's working correctly on your system.
+
+Explored the Web Interface: You navigated through Grafana's intuitive web interface and understood the layout and key sections.
+
+Created Your First Dashboard: You built a basic dashboard with test data, learning the fundamental concepts of panels and visualizations.
+
+Understood Grafana Architecture: You gained insight into how Grafana components work together to provide powerful data visualization capabilities.
+
+Why This Matters
+Grafana is a leading open-source platform for monitoring and observability. The skills you've learned in this lab form the foundation for:
+
+Infrastructure Monitoring: Visualizing server metrics, network performance, and system health
+Application Performance Monitoring: Tracking application metrics and user experience
+Business Intelligence: Creating dashboards for business metrics and KPIs
+IoT Data Visualization: Displaying sensor data and device telemetry
+Log Analysis: Visualizing log data and identifying trends
+Next Steps
+With Grafana now installed and configured, you're ready to:
+
+Connect real data sources like Prometheus, InfluxDB, or databases
+Create more sophisticated dashboards with multiple panels
+Set up alerting rules to notify you of important events
+Explore advanced features like templating and annotations
+Learn about Grafana's plugin ecosystem for extended functionality
+This lab has provided you with a solid foundation in Grafana that you can build upon in future monitoring and visualization projects.
