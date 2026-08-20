@@ -1,0 +1,566 @@
+Creating Dynamic Dashboards with Variables
+Lab Objectives
+By the end of this lab, you will be able to:
+
+Understand the concept and benefits of dashboard variables in Grafana
+Create different types of variables including query variables, custom variables, and constant variables
+Configure variable settings such as refresh options, multi-value selection, and include all options
+Use variables in panel queries to create dynamic content
+Apply variables in panel titles and annotations for enhanced dashboard interactivity
+Implement cascading variables for hierarchical data filtering
+Test and validate variable functionality across different dashboard panels
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Linux command line operations
+Familiarity with Grafana dashboard creation and panel configuration
+Knowledge of PromQL (Prometheus Query Language) basics
+Understanding of time series data concepts
+Experience with basic system monitoring concepts
+Lab Environment Setup
+Note: Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated Linux machine. The provided machine is bare metal with no pre-installed tools, so you will install all required components during this lab.
+
+Task 1: Environment Preparation and Tool Installation
+Subtask 1.1: Update System and Install Dependencies
+First, update your system and install necessary dependencies:
+
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y wget curl software-properties-common apt-transport-https
+Subtask 1.2: Install Docker for Container Management
+Install Docker to run Prometheus and Grafana:
+
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io
+sudo systemctl start docker
+sudo systemctl enable docker
+sudo usermod -aG docker $USER
+Log out and log back in, or run:
+
+newgrp docker
+Subtask 1.3: Create Project Directory Structure
+Create a structured directory for the lab:
+
+mkdir -p ~/grafana-variables-lab/{prometheus,grafana,data}
+cd ~/grafana-variables-lab
+Subtask 1.4: Configure Prometheus
+Create a Prometheus configuration file:
+
+cat > prometheus/prometheus.yml << 'EOF'
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 5s
+
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 5s
+
+  - job_name: 'sample-app-1'
+    static_configs:
+      - targets: ['sample-app-1:8080']
+    scrape_interval: 5s
+    labels:
+      environment: 'production'
+      region: 'us-east-1'
+      team: 'backend'
+
+  - job_name: 'sample-app-2'
+    static_configs:
+      - targets: ['sample-app-2:8080']
+    scrape_interval: 5s
+    labels:
+      environment: 'staging'
+      region: 'us-west-2'
+      team: 'frontend'
+
+  - job_name: 'sample-app-3'
+    static_configs:
+      - targets: ['sample-app-3:8080']
+    scrape_interval: 5s
+    labels:
+      environment: 'development'
+      region: 'eu-west-1'
+      team: 'backend'
+EOF
+Subtask 1.5: Create Docker Compose Configuration
+Create a comprehensive Docker Compose file:
+
+cat > docker-compose.yml << 'EOF'
+version: '3.8'
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+    networks:
+      - monitoring
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - monitoring
+
+  sample-app-1:
+    image: prom/prometheus:latest
+    container_name: sample-app-1
+    ports:
+      - "8081:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.listen-address=0.0.0.0:8080'
+    networks:
+      - monitoring
+
+  sample-app-2:
+    image: prom/prometheus:latest
+    container_name: sample-app-2
+    ports:
+      - "8082:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.listen-address=0.0.0.0:8080'
+    networks:
+      - monitoring
+
+  sample-app-3:
+    image: prom/prometheus:latest
+    container_name: sample-app-3
+    ports:
+      - "8083:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.listen-address=0.0.0.0:8080'
+    networks:
+      - monitoring
+
+volumes:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  monitoring:
+    driver: bridge
+EOF
+Subtask 1.6: Start the Monitoring Stack
+Launch all services:
+
+docker-compose up -d
+Verify all containers are running:
+
+docker-compose ps
+Wait for all services to be healthy (approximately 2-3 minutes):
+
+sleep 180
+Task 2: Create Variables in Grafana
+Subtask 2.1: Access Grafana and Initial Setup
+Open your web browser and navigate to Grafana:
+
+echo "Access Grafana at: http://localhost:3000"
+echo "Username: admin"
+echo "Password: admin123"
+Log in to Grafana using the credentials above
+Navigate to Configuration > Data Sources
+Click Add data source
+Select Prometheus
+Set the URL to: http://prometheus:9090
+Click Save & Test
+Subtask 2.2: Create a New Dashboard
+Click the + icon in the left sidebar
+Select Dashboard
+Click Add new panel
+In the panel editor, click Save (disk icon)
+Name the dashboard: Dynamic Variables Dashboard
+Click Save
+Subtask 2.3: Create Your First Variable - Job Variable
+Click the Dashboard settings gear icon in the top right
+Select Variables from the left menu
+Click Add variable
+Configure the Job variable:
+
+Name: job
+Type: Query
+Label: Job
+Data source: Prometheus
+Query: label_values(up, job)
+Regex: Leave empty
+Sort: Alphabetical (asc)
+Multi-value: Enable (check the box)
+Include All option: Enable (check the box)
+Custom all value: Leave empty
+Click Update to save the variable.
+
+Subtask 2.4: Create Environment Variable
+Click Add variable again and configure:
+
+Name: environment
+Type: Query
+Label: Environment
+Data source: Prometheus
+Query: label_values(up, environment)
+Regex: Leave empty
+Sort: Alphabetical (asc)
+Multi-value: Enable
+Include All option: Enable
+Click Update to save.
+
+Subtask 2.5: Create Region Variable
+Add another variable:
+
+Name: region
+Type: Query
+Label: Region
+Data source: Prometheus
+Query: label_values(up, region)
+Regex: Leave empty
+Sort: Alphabetical (asc)
+Multi-value: Enable
+Include All option: Enable
+Click Update to save.
+
+Subtask 2.6: Create Instance Variable with Cascading
+Create a cascading variable that depends on the job selection:
+
+Name: instance
+Type: Query
+Label: Instance
+Data source: Prometheus
+Query: label_values(up{job=~"$job"}, instance)
+Regex: Leave empty
+Sort: Alphabetical (asc)
+Multi-value: Enable
+Include All option: Enable
+Click Update to save.
+
+Subtask 2.7: Create Custom Interval Variable
+Add a custom variable for time intervals:
+
+Name: interval
+Type: Custom
+Label: Interval
+Values separated by comma: 5m,10m,30m,1h,6h,12h,1d
+Multi-value: Disable
+Include All option: Disable
+Click Update to save.
+
+Click Save dashboard to save all variables.
+
+Task 3: Use Variables to Create Dynamic Dashboard Panels
+Subtask 3.1: Create CPU Usage Panel with Variables
+Click Add panel in the dashboard
+Select Add a new panel
+In the query editor, enter:
+rate(prometheus_tsdb_head_samples_appended_total{job=~"$job", instance=~"$instance"}[$interval])
+Set the panel title to: CPU Usage - Job: $job, Instance: $instance
+
+In the Panel options:
+
+Title: CPU Usage - Job: $job, Instance: $instance
+Description: Dynamic CPU usage metrics filtered by selected job and instance
+Click Apply to save the panel
+
+Subtask 3.2: Create Memory Usage Panel
+Add another panel:
+
+Click Add panel > Add a new panel
+Enter the query:
+prometheus_tsdb_head_series{job=~"$job", instance=~"$instance"}
+Configure the panel:
+
+Title: Memory Series - $job ($region)
+Description: Memory metrics for job $job in region $region
+Click Apply
+
+Subtask 3.3: Create Network Traffic Panel
+Add a third panel:
+
+Click Add panel > Add a new panel
+Enter the query:
+rate(prometheus_http_requests_total{job=~"$job", instance=~"$instance"}[$interval])
+Configure the panel:
+
+Title: HTTP Requests Rate - $environment Environment
+Description: HTTP request rate for $environment environment over $interval intervals
+In the Legend section, set:
+
+Legend: {{job}} - {{instance}}
+Click Apply
+
+Subtask 3.4: Create Status Overview Panel
+Create a stat panel:
+
+Click Add panel > Add a new panel
+Change visualization type to Stat
+Enter the query:
+count(up{job=~"$job", environment=~"$environment", region=~"$region"} == 1)
+Configure the panel:
+
+Title: Active Services
+Description: Number of active services matching current filters
+In Value options:
+
+Unit: Short
+Decimals: 0
+Click Apply
+
+Subtask 3.5: Create Table Panel with Multiple Metrics
+Add a table panel:
+
+Click Add panel > Add a new panel
+Change visualization to Table
+Add multiple queries:
+Query A:
+
+up{job=~"$job", environment=~"$environment", region=~"$region"}
+Query B (click + Query):
+
+prometheus_build_info{job=~"$job", instance=~"$instance"}
+Configure the panel:
+
+Title: Service Status Table - $job
+Description: Detailed status information for selected services
+Click Apply
+
+Subtask 3.6: Save and Test the Dashboard
+Click Save dashboard (disk icon)
+Add a description: Dashboard demonstrating dynamic variables with Prometheus metrics
+Click Save
+Task 4: Test Variable Functionality and Advanced Features
+Subtask 4.1: Test Basic Variable Functionality
+At the top of your dashboard, you should see dropdown menus for each variable
+
+Test the Job variable:
+
+Select different jobs and observe how panels update
+Try selecting multiple jobs using Ctrl+click
+Test the "All" option
+Test cascading variables:
+
+Change the Job selection and notice how the Instance dropdown updates
+This demonstrates variable dependencies
+Subtask 4.2: Test Multi-Value Selection
+In the Environment dropdown:
+
+Select multiple environments
+Observe how the query adapts using the =~ operator
+Notice how panel titles update dynamically
+Test the Region variable:
+
+Select specific regions
+Combine with other variable selections
+Subtask 4.3: Create Advanced Variable with Regex
+Go to Dashboard settings > Variables
+Click Add variable
+Create a filtered job variable:
+Name: filtered_job
+Type: Query
+Label: Filtered Jobs
+Data source: Prometheus
+Query: label_values(up, job)
+Regex: /.*app.*/
+Sort: Alphabetical (asc)
+Multi-value: Enable
+Include All option: Enable
+Click Update and Save dashboard
+Subtask 4.4: Add Variable to Panel Query
+Edit one of your existing panels
+Modify the query to use the new filtered variable:
+up{job=~"$filtered_job", environment=~"$environment"}
+Update the panel title to: Filtered Services - $filtered_job
+Click Apply
+Subtask 4.5: Create Constant Variable for Thresholds
+Add a new variable:
+
+Name: cpu_threshold
+Type: Constant
+Label: CPU Threshold
+Value: 80
+Create a new panel using this threshold:
+
+Query: prometheus_tsdb_head_samples_appended_total > $cpu_threshold
+Title: Services Above $cpu_threshold Threshold
+Subtask 4.6: Test Variable Refresh Options
+Edit the job variable
+Change Refresh to On Dashboard Load
+Save and reload the dashboard
+Notice how variables refresh automatically
+Task 5: Advanced Variable Techniques and Troubleshooting
+Subtask 5.1: Create Text Box Variable for Custom Filtering
+Add a new variable:
+
+Name: custom_filter
+Type: Textbox
+Label: Custom Filter
+Default value: .*
+Use this in a panel query:
+
+up{job=~"$job", instance=~"$custom_filter"}
+Subtask 5.2: Implement Variable Chaining
+Create a dependent variable chain:
+
+Country Variable:
+
+Name: country
+Type: Custom
+Values: US,EU,ASIA
+Region Variable (modify existing):
+
+Query: label_values(up{region=~"${country:regex}"}, region)
+This creates a dependency where region options change based on country selection.
+
+Subtask 5.3: Add Variable Validation
+Create a validation panel:
+
+Query: count(up{job=~"$job"}) or vector(0)
+Title: Selected Jobs Count: $job
+Type: Stat panel
+This helps users understand their current selection impact.
+
+Subtask 5.4: Troubleshooting Common Issues
+Test and resolve common variable issues:
+
+Empty Variable Results:
+
+Check if Prometheus has data for the label
+Verify the query syntax
+Test the query directly in Prometheus
+Variable Not Updating Panels:
+
+Ensure panels use the variable with $variable_name syntax
+Check that the variable name matches exactly
+Verify the variable is saved
+Performance Issues:
+
+Limit multi-value selections when possible
+Use appropriate refresh settings
+Consider using regex to filter large label sets
+Subtask 5.5: Export and Import Dashboard
+Export your dashboard:
+Go to Dashboard settings > JSON Model
+Copy the JSON content
+Save it to a file:
+cat > ~/grafana-variables-lab/dashboard-export.json << 'EOF'
+# Paste your JSON content here
+EOF
+Test importing:
+Create a new dashboard
+Use Import function
+Upload your JSON file
+Verification and Testing
+Verify Variable Creation
+Check that all variables are working:
+
+echo "=== Variable Verification Checklist ==="
+echo "1. Job variable shows available jobs"
+echo "2. Environment variable displays environments"
+echo "3. Region variable lists regions"
+echo "4. Instance variable cascades with job selection"
+echo "5. Interval variable provides time options"
+echo "6. Custom variables work as expected"
+Test Panel Updates
+Change each variable and confirm panels update
+Test multi-value selections
+Verify cascading behavior
+Check that panel titles update dynamically
+Performance Check
+Monitor dashboard performance:
+
+echo "=== Performance Check ==="
+echo "Dashboard load time: < 5 seconds"
+echo "Variable query time: < 2 seconds"
+echo "Panel refresh time: < 3 seconds"
+Troubleshooting Common Issues
+Variable Not Showing Data
+If variables appear empty:
+
+Check Prometheus connectivity:
+curl http://localhost:9090/api/v1/label/job/values
+Verify data exists:
+curl "http://localhost:9090/api/v1/query?query=up"
+Panels Not Updating
+If panels don't respond to variable changes:
+
+Check variable syntax in queries (use $variable_name)
+Verify variable names match exactly
+Ensure variables are saved
+Check browser console for errors
+Performance Issues
+If dashboard is slow:
+
+Reduce the number of multi-value selections
+Optimize queries
+Adjust refresh intervals
+Use appropriate time ranges
+Cleanup
+To clean up the lab environment:
+
+cd ~/grafana-variables-lab
+docker-compose down -v
+cd ~
+rm -rf ~/grafana-variables-lab
+Conclusion
+In this comprehensive lab, you have successfully learned to create and implement dynamic dashboards using Grafana variables. You accomplished several key objectives:
+
+Variable Creation Mastery: You created multiple types of variables including query variables that dynamically pull data from Prometheus, custom variables for predefined options, constant variables for threshold values, and textbox variables for user input.
+
+Dynamic Dashboard Implementation: You built panels that automatically update based on variable selections, implemented cascading variables where one variable's options depend on another's selection, and created multi-value variables that allow users to select multiple options simultaneously.
+
+Advanced Techniques: You learned to use variables in panel titles and descriptions for dynamic labeling, implemented regex filtering for more sophisticated variable options, created variable dependencies and chains for hierarchical data filtering, and optimized variable performance through appropriate refresh settings.
+
+Real-World Application: The skills you've developed are directly applicable to production monitoring environments where teams need to filter data by different dimensions such as environments, regions, services, or time intervals. Dynamic dashboards reduce the need for multiple static dashboards and provide users with flexible, interactive monitoring experiences.
+
+Best Practices: You've learned important practices such as using meaningful variable names, implementing appropriate refresh strategies, optimizing queries for performance, and providing user-friendly labels and descriptions.
+
+These dynamic dashboard capabilities are essential for modern monitoring and observability practices, enabling teams to quickly drill down into specific data subsets, compare metrics across different dimensions, and create reusable dashboard templates that work across multiple environments or services. The variable system in Grafana is a powerful feature that significantly enhances dashboard usability and reduces maintenance overhead in large-scale monitoring deployments.
