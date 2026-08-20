@@ -1,0 +1,621 @@
+ Integrating Grafana with Alertmanager
+Learning Objectives
+By the end of this lab, you will be able to:
+
+Install and configure Prometheus Alertmanager on a Linux system
+Set up Grafana to work with Alertmanager for advanced alert handling
+Create and configure alerting rules in Prometheus
+Configure notification channels in Alertmanager
+Test the complete alert flow from Prometheus through Alertmanager to notification endpoints
+Understand the relationship between Prometheus, Alertmanager, and Grafana in a monitoring stack
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Linux command line operations
+Familiarity with YAML configuration files
+Basic knowledge of Prometheus and Grafana concepts
+Understanding of monitoring and alerting fundamentals
+Experience with text editors like nano or vim
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated Linux machine. The provided machine is bare metal with no pre-installed tools, so you will install all required components during the lab exercises.
+
+Task 1: Set up Prometheus Alertmanager
+Subtask 1.1: Install Prometheus and Node Exporter
+First, we need to set up Prometheus and Node Exporter to have metrics to alert on.
+
+Step 1: Update the system and install required packages
+
+sudo apt update
+sudo apt install -y wget curl tar
+Step 2: Create a prometheus user
+
+sudo useradd --no-create-home --shell /bin/false prometheus
+sudo useradd --no-create-home --shell /bin/false node_exporter
+Step 3: Create directories for Prometheus
+
+sudo mkdir /etc/prometheus
+sudo mkdir /var/lib/prometheus
+sudo chown prometheus:prometheus /etc/prometheus
+sudo chown prometheus:prometheus /var/lib/prometheus
+Step 4: Download and install Prometheus
+
+cd /tmp
+wget https://github.com/prometheus/prometheus/releases/download/v2.45.0/prometheus-2.45.0.linux-amd64.tar.gz
+tar xvf prometheus-2.45.0.linux-amd64.tar.gz
+cd prometheus-2.45.0.linux-amd64
+sudo cp prometheus /usr/local/bin/
+sudo cp promtool /usr/local/bin/
+sudo chown prometheus:prometheus /usr/local/bin/prometheus
+sudo chown prometheus:prometheus /usr/local/bin/promtool
+sudo cp -r consoles /etc/prometheus
+sudo cp -r console_libraries /etc/prometheus
+sudo chown -R prometheus:prometheus /etc/prometheus/consoles
+sudo chown -R prometheus:prometheus /etc/prometheus/console_libraries
+Step 5: Download and install Node Exporter
+
+cd /tmp
+wget https://github.com/prometheus/node_exporter/releases/download/v1.6.1/node_exporter-1.6.1.linux-amd64.tar.gz
+tar xvf node_exporter-1.6.1.linux-amd64.tar.gz
+cd node_exporter-1.6.1.linux-amd64
+sudo cp node_exporter /usr/local/bin
+sudo chown node_exporter:node_exporter /usr/local/bin/node_exporter
+Subtask 1.2: Configure Prometheus with Alerting Rules
+Step 1: Create Prometheus configuration file
+
+sudo nano /etc/prometheus/prometheus.yml
+Add the following configuration:
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "alert_rules.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - localhost:9093
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'node'
+    static_configs:
+      - targets: ['localhost:9100']
+Step 2: Create alerting rules file
+
+sudo nano /etc/prometheus/alert_rules.yml
+Add the following alerting rules:
+
+groups:
+- name: system_alerts
+  rules:
+  - alert: HighCPUUsage
+    expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High CPU usage detected"
+      description: "CPU usage is above 80% for more than 2 minutes on {{ $labels.instance }}"
+
+  - alert: HighMemoryUsage
+    expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+    for: 2m
+    labels:
+      severity: critical
+    annotations:
+      summary: "High memory usage detected"
+      description: "Memory usage is above 85% for more than 2 minutes on {{ $labels.instance }}"
+
+  - alert: DiskSpaceLow
+    expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100 > 90
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Disk space is running low"
+      description: "Disk usage is above 90% on {{ $labels.instance }} filesystem {{ $labels.mountpoint }}"
+
+  - alert: ServiceDown
+    expr: up == 0
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Service is down"
+      description: "{{ $labels.job }} service is down on {{ $labels.instance }}"
+Step 3: Set proper ownership for configuration files
+
+sudo chown prometheus:prometheus /etc/prometheus/prometheus.yml
+sudo chown prometheus:prometheus /etc/prometheus/alert_rules.yml
+Subtask 1.3: Install and Configure Alertmanager
+Step 1: Create alertmanager user and directories
+
+sudo useradd --no-create-home --shell /bin/false alertmanager
+sudo mkdir /etc/alertmanager
+sudo mkdir /var/lib/alertmanager
+sudo chown alertmanager:alertmanager /etc/alertmanager
+sudo chown alertmanager:alertmanager /var/lib/alertmanager
+Step 2: Download and install Alertmanager
+
+cd /tmp
+wget https://github.com/prometheus/alertmanager/releases/download/v0.26.0/alertmanager-0.26.0.linux-amd64.tar.gz
+tar xvf alertmanager-0.26.0.linux-amd64.tar.gz
+cd alertmanager-0.26.0.linux-amd64
+sudo cp alertmanager /usr/local/bin
+sudo cp amtool /usr/local/bin
+sudo chown alertmanager:alertmanager /usr/local/bin/alertmanager
+sudo chown alertmanager:alertmanager /usr/local/bin/amtool
+Step 3: Create Alertmanager configuration
+
+sudo nano /etc/alertmanager/alertmanager.yml
+Add the following configuration:
+
+global:
+  smtp_smarthost: 'localhost:587'
+  smtp_from: 'alertmanager@example.com'
+
+route:
+  group_by: ['alertname']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'web.hook'
+
+receivers:
+- name: 'web.hook'
+  webhook_configs:
+  - url: 'http://localhost:5001/webhook'
+    send_resolved: true
+
+- name: 'email-notifications'
+  email_configs:
+  - to: 'admin@example.com'
+    subject: 'Alert: {{ .GroupLabels.alertname }}'
+    body: |
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      {{ end }}
+
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'dev', 'instance']
+Step 4: Set proper ownership
+
+sudo chown alertmanager:alertmanager /etc/alertmanager/alertmanager.yml
+Subtask 1.4: Create Systemd Services
+Step 1: Create Node Exporter service
+
+sudo nano /etc/systemd/system/node_exporter.service
+Add the following content:
+
+[Unit]
+Description=Node Exporter
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=node_exporter
+Group=node_exporter
+Type=simple
+ExecStart=/usr/local/bin/node_exporter
+
+[Install]
+WantedBy=multi-user.target
+Step 2: Create Prometheus service
+
+sudo nano /etc/systemd/system/prometheus.service
+Add the following content:
+
+[Unit]
+Description=Prometheus
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=prometheus
+Group=prometheus
+Type=simple
+ExecStart=/usr/local/bin/prometheus \
+    --config.file /etc/prometheus/prometheus.yml \
+    --storage.tsdb.path /var/lib/prometheus/ \
+    --web.console.templates=/etc/prometheus/consoles \
+    --web.console.libraries=/etc/prometheus/console_libraries \
+    --web.listen-address=0.0.0.0:9090 \
+    --web.enable-lifecycle
+
+[Install]
+WantedBy=multi-user.target
+Step 3: Create Alertmanager service
+
+sudo nano /etc/systemd/system/alertmanager.service
+Add the following content:
+
+[Unit]
+Description=Alertmanager
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=alertmanager
+Group=alertmanager
+Type=simple
+ExecStart=/usr/local/bin/alertmanager \
+    --config.file=/etc/alertmanager/alertmanager.yml \
+    --storage.path=/var/lib/alertmanager/
+
+[Install]
+WantedBy=multi-user.target
+Step 4: Start and enable all services
+
+sudo systemctl daemon-reload
+sudo systemctl start node_exporter
+sudo systemctl enable node_exporter
+sudo systemctl start prometheus
+sudo systemctl enable prometheus
+sudo systemctl start alertmanager
+sudo systemctl enable alertmanager
+Step 5: Verify services are running
+
+sudo systemctl status node_exporter
+sudo systemctl status prometheus
+sudo systemctl status alertmanager
+Task 2: Integrate Alertmanager with Grafana for Advanced Alert Handling
+Subtask 2.1: Install Grafana
+Step 1: Install Grafana dependencies
+
+sudo apt-get install -y software-properties-common
+Step 2: Add Grafana repository
+
+wget -q -O - https://packages.grafana.com/gpg.key | sudo apt-key add -
+echo "deb https://packages.grafana.com/oss/deb stable main" | sudo tee -a /etc/apt/sources.list.d/grafana.list
+Step 3: Install Grafana
+
+sudo apt-get update
+sudo apt-get install -y grafana
+Step 4: Start and enable Grafana
+
+sudo systemctl start grafana-server
+sudo systemctl enable grafana-server
+sudo systemctl status grafana-server
+Subtask 2.2: Configure Grafana Data Sources
+Step 1: Access Grafana web interface
+
+Open your web browser and navigate to http://localhost:3000
+
+Default credentials:
+
+Username: admin
+Password: admin
+Step 2: Add Prometheus data source via command line
+
+Create a data source configuration file:
+
+cat > /tmp/prometheus-datasource.json << EOF
+{
+  "name": "Prometheus",
+  "type": "prometheus",
+  "url": "http://localhost:9090",
+  "access": "proxy",
+  "isDefault": true
+}
+EOF
+Add the data source using Grafana API:
+
+curl -X POST \
+  http://admin:admin@localhost:3000/api/datasources \
+  -H 'Content-Type: application/json' \
+  -d @/tmp/prometheus-datasource.json
+Step 3: Add Alertmanager data source
+
+Create Alertmanager data source configuration:
+
+cat > /tmp/alertmanager-datasource.json << EOF
+{
+  "name": "Alertmanager",
+  "type": "alertmanager",
+  "url": "http://localhost:9093",
+  "access": "proxy"
+}
+EOF
+Add the Alertmanager data source:
+
+curl -X POST \
+  http://admin:admin@localhost:3000/api/datasources \
+  -H 'Content-Type: application/json' \
+  -d @/tmp/alertmanager-datasource.json
+Subtask 2.3: Create Grafana Dashboard with Alerts
+Step 1: Create a comprehensive monitoring dashboard
+
+cat > /tmp/monitoring-dashboard.json << 'EOF'
+{
+  "dashboard": {
+    "id": null,
+    "title": "System Monitoring with Alerts",
+    "tags": ["monitoring", "alerts"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "CPU Usage",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "100 - (avg by(instance) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 70},
+                {"color": "red", "value": 80}
+              ]
+            },
+            "unit": "percent"
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Memory Usage",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 75},
+                {"color": "red", "value": 85}
+              ]
+            },
+            "unit": "percent"
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Active Alerts",
+        "type": "alertlist",
+        "targets": [],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8}
+      }
+    ],
+    "time": {"from": "now-1h", "to": "now"},
+    "refresh": "5s"
+  }
+}
+EOF
+Step 2: Import the dashboard
+
+curl -X POST \
+  http://admin:admin@localhost:3000/api/dashboards/db \
+  -H 'Content-Type: application/json' \
+  -d @/tmp/monitoring-dashboard.json
+Subtask 2.4: Configure Grafana Alerting
+Step 1: Create notification channel configuration
+
+cat > /tmp/notification-channel.json << EOF
+{
+  "name": "alertmanager-webhook",
+  "type": "webhook",
+  "settings": {
+    "url": "http://localhost:9093/api/v1/alerts",
+    "httpMethod": "POST"
+  }
+}
+EOF
+Step 2: Add notification channel
+
+curl -X POST \
+  http://admin:admin@localhost:3000/api/alert-notifications \
+  -H 'Content-Type: application/json' \
+  -d @/tmp/notification-channel.json
+Task 3: Test Alert Flow
+Subtask 3.1: Create a Simple Webhook Server for Testing
+Step 1: Install Python and create a webhook server
+
+sudo apt install -y python3 python3-pip
+pip3 install flask
+Step 2: Create webhook server script
+
+cat > /tmp/webhook_server.py << 'EOF'
+from flask import Flask, request, jsonify
+import json
+from datetime import datetime
+
+app = Flask(__name__)
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    data = request.get_json()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    print(f"\n[{timestamp}] Alert received:")
+    print(json.dumps(data, indent=2))
+    
+    # Log to file
+    with open('/tmp/alerts.log', 'a') as f:
+        f.write(f"[{timestamp}] {json.dumps(data)}\n")
+    
+    return jsonify({"status": "received"}), 200
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5001, debug=True)
+EOF
+Step 3: Start the webhook server in background
+
+cd /tmp
+python3 webhook_server.py &
+WEBHOOK_PID=$!
+echo $WEBHOOK_PID > /tmp/webhook.pid
+Subtask 3.2: Generate Test Alerts
+Step 1: Create a CPU stress test to trigger alerts
+
+sudo apt install -y stress
+Step 2: Generate high CPU usage
+
+# Start stress test in background
+stress --cpu 4 --timeout 300s &
+STRESS_PID=$!
+echo "Stress test started with PID: $STRESS_PID"
+Step 3: Monitor alert generation
+
+# Check Prometheus alerts
+echo "Checking Prometheus alerts..."
+curl -s http://localhost:9090/api/v1/alerts | python3 -m json.tool
+
+# Check Alertmanager alerts
+echo "Checking Alertmanager alerts..."
+curl -s http://localhost:9093/api/v1/alerts | python3 -m json.tool
+Step 4: Monitor webhook logs
+
+# Watch webhook logs
+tail -f /tmp/alerts.log
+Subtask 3.3: Verify Alert Flow in Grafana
+Step 1: Access Grafana dashboard
+
+Navigate to http://localhost:3000 and go to your monitoring dashboard.
+
+Step 2: Check alert status
+
+Observe the CPU usage panel showing high values
+Check the Active Alerts panel for triggered alerts
+Navigate to Alerting > Alert Rules to see rule status
+Step 3: Verify Alertmanager integration
+
+Navigate to http://localhost:9093 to access Alertmanager web interface and verify:
+
+Active alerts are displayed
+Alert grouping is working
+Webhook notifications are being sent
+Subtask 3.4: Test Alert Resolution
+Step 1: Stop the stress test
+
+# Kill stress process
+kill $STRESS_PID
+echo "Stress test stopped"
+Step 2: Monitor alert resolution
+
+# Wait for alerts to resolve (may take a few minutes)
+echo "Waiting for alerts to resolve..."
+sleep 120
+
+# Check resolved alerts
+curl -s http://localhost:9093/api/v1/alerts | python3 -m json.tool
+Step 3: Verify resolution notifications
+
+# Check webhook logs for resolution notifications
+tail -10 /tmp/alerts.log
+Subtask 3.5: Test Different Alert Types
+Step 1: Create a memory stress test
+
+# Generate high memory usage
+stress --vm 2 --vm-bytes 1G --timeout 180s &
+MEMORY_STRESS_PID=$!
+echo "Memory stress test started with PID: $MEMORY_STRESS_PID"
+Step 2: Create a disk space alert (if applicable)
+
+# Create a large file to consume disk space (be careful with disk space)
+dd if=/dev/zero of=/tmp/large_file bs=1M count=100
+Step 3: Monitor different alert types
+
+# Check for different alert types
+curl -s http://localhost:9090/api/v1/alerts | grep -E "(HighCPUUsage|HighMemoryUsage|DiskSpaceLow)"
+Subtask 3.6: Clean Up Test Environment
+Step 1: Stop stress tests
+
+# Kill any remaining stress processes
+pkill stress
+Step 2: Clean up test files
+
+# Remove large test file
+rm -f /tmp/large_file
+Step 3: Stop webhook server
+
+# Stop webhook server
+if [ -f /tmp/webhook.pid ]; then
+    kill $(cat /tmp/webhook.pid)
+    rm /tmp/webhook.pid
+fi
+Troubleshooting Tips
+Common Issues and Solutions
+Issue 1: Services not starting
+
+# Check service logs
+sudo journalctl -u prometheus -f
+sudo journalctl -u alertmanager -f
+sudo journalctl -u grafana-server -f
+Issue 2: Alerts not firing
+
+# Verify Prometheus configuration
+/usr/local/bin/promtool check config /etc/prometheus/prometheus.yml
+/usr/local/bin/promtool check rules /etc/prometheus/alert_rules.yml
+Issue 3: Alertmanager not receiving alerts
+
+# Check Prometheus targets
+curl http://localhost:9090/api/v1/targets
+Issue 4: Grafana not connecting to data sources
+
+# Test data source connectivity
+curl -H "Authorization: Bearer YOUR_API_KEY" \
+  http://localhost:3000/api/datasources/proxy/1/api/v1/query?query=up
+Issue 5: Webhook not receiving notifications
+
+# Check Alertmanager configuration
+/usr/local/bin/amtool config show --config.file=/etc/alertmanager/alertmanager.yml
+Verification Commands
+Use these commands to verify your setup:
+
+# Check all services are running
+sudo systemctl status node_exporter prometheus alertmanager grafana-server
+
+# Verify Prometheus is scraping targets
+curl -s http://localhost:9090/api/v1/targets | grep -E "(up|health)"
+
+# Check alert rules are loaded
+curl -s http://localhost:9090/api/v1/rules
+
+# Verify Alertmanager is receiving configuration
+curl -s http://localhost:9093/api/v1/status
+
+# Test Grafana API
+curl -s http://admin:admin@localhost:3000/api/health
+Conclusion
+In this lab, you have successfully:
+
+Installed and configured a complete monitoring stack including Prometheus, Alertmanager, Node Exporter, and Grafana on a single Linux machine
+Set up comprehensive alerting rules that monitor system resources like CPU, memory, and disk usage
+Integrated Grafana with Alertmanager to provide advanced alert visualization and management capabilities
+Configured notification channels to handle alert routing and delivery
+Tested the complete alert flow from metric collection through alert generation to notification delivery
+Verified alert resolution and proper cleanup of resolved alerts
+This integration provides a robust monitoring and alerting solution that can scale to monitor complex infrastructure environments. The combination of Prometheus for metrics collection, Alertmanager for alert management, and Grafana for visualization creates a powerful observability platform.
+
+Key Benefits Achieved:
+
+Centralized alerting with sophisticated routing and grouping capabilities
+Visual alert management through Grafana's intuitive interface
+Flexible notification options supporting multiple channels and formats
+Alert correlation and deduplication to reduce noise
+Historical alert tracking for trend analysis and troubleshooting
+This setup forms the foundation for enterprise-grade monitoring solutions and can be extended with additional exporters, custom metrics, and advanced alerting strategies to meet specific organizational requirements.
