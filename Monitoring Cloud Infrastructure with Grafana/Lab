@@ -1,0 +1,363 @@
+Monitoring Cloud Infrastructure with Grafana
+Objectives
+Design and deploy a production-grade observability stack (Grafana + Prometheus + exporters) from a bare Ubuntu instance
+Build multi-service Grafana dashboards that surface EC2-simulated, RDS-simulated, and host-level metrics using PromQL expressions
+Implement threshold-based alerting with Alertmanager routing and verify end-to-end alert delivery
+Prerequisites
+Comfort with Linux system administration including systemd service management and file permissions
+Familiarity with cloud infrastructure concepts: compute instances, managed databases, load balancers, and object storage
+Understanding of time-series data concepts: scrape intervals, metric labels, and rate calculations
+Lab Environment
+You will work on a dedicated AWS EC2 Ubuntu instance provided by Al Nafi. The instance has a base Ubuntu installation; you will install all required tools in Task 1.
+
+Task 1: Environment Setup â Install and Verify the Observability Stack
+Step 1.1: Install System Dependencies, Docker, and Grafana
+Your instance needs Docker (for running auxiliary containers), Grafana (the visualization layer), and Python 3 (for the metrics simulator you will write in Task 2). Install all three from their official repositories, not from Ubuntu's default apt index, so you receive current stable versions.
+
+# Refresh package index and install transport utilities
+sudo apt-get update -y
+sudo apt-get install -y \
+    ca-certificates \
+    curl \
+    gnupg \
+    lsb-release \
+    python3 \
+    python3-pip \
+    net-tools
+
+# Official Docker installation guide: https://docs.docker.com/engine/install/ubuntu/
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+    | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+sudo tee /etc/apt/sources.list.d/docker.list <<'EOF'
+deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu jammy stable
+EOF
+
+sudo apt-get update -y
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+sudo usermod -aG docker "$USER"
+Troubleshoot this step:
+
+Error seen: E: Malformed entry 1 in list file /etc/apt/sources.list.d/docker.list
+Recovery: cat /etc/apt/sources.list.d/docker.list â the file must be a single unbroken line with no backslashes; delete it with sudo rm /etc/apt/sources.list.d/docker.list and re-run the tee heredoc block above.
+Official docs: https://docs.docker.com/engine/install/ubuntu/
+# Official Grafana installation guide: https://grafana.com/docs/grafana/latest/setup-grafana/installation/debian/
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://apt.grafana.com/gpg.key \
+    | sudo gpg --dearmor -o /etc/apt/keyrings/grafana.gpg
+
+sudo tee /etc/apt/sources.list.d/grafana.list <<'EOF'
+deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main
+EOF
+
+sudo apt-get update -y
+sudo apt-get install -y grafana
+Troubleshoot this step:
+
+Error seen: NO_PUBKEY or The following signatures couldn't be verified during apt-get update
+Recovery: Confirm the keyring file exists and is non-empty: ls -lh /etc/apt/keyrings/grafana.gpg â if it is 0 bytes the curl command failed silently; re-run it with curl -fsSL https://apt.grafana.com/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/grafana.gpg and verify exit code 0.
+Official docs: https://grafana.com/docs/grafana/latest/setup-grafana/installation/debian/
+Step 1.2: Install Prometheus and Node Exporter as Systemd Services
+Prometheus (the time-series metrics database) and Node Exporter (the agent that exposes host-level OS metrics) must each run as dedicated non-login system users and be managed by systemd so they survive reboots. Choose a stable release from the official Prometheus GitHub releases page; do not use Ubuntu's packaged version.
+
+# Official Prometheus releases: https://github.com/prometheus/prometheus/releases
+PROM_VERSION="2.51.2"
+cd /tmp
+curl -fsSL "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz" \
+    -o prometheus.tar.gz
+tar -xzf prometheus.tar.gz
+
+sudo useradd --no-create-home --shell /bin/false prometheus
+sudo mkdir -p /etc/prometheus /var/lib/prometheus
+sudo cp "prometheus-${PROM_VERSION}.linux-amd64/prometheus" /usr/local/bin/prometheus
+sudo cp "prometheus-${PROM_VERSION}.linux-amd64/promtool"   /usr/local/bin/promtool
+sudo cp -r "prometheus-${PROM_VERSION}.linux-amd64/consoles"          /etc/prometheus/
+sudo cp -r "prometheus-${PROM_VERSION}.linux-amd64/console_libraries" /etc/prometheus/
+sudo chown -R prometheus:prometheus /etc/prometheus /var/lib/prometheus \
+    /usr/local/bin/prometheus /usr/local/bin/promtool
+Troubleshoot this step:
+
+Error seen: curl: (22) The requested URL returned error: 404 â the version string in the URL does not exist on GitHub.
+Recovery: Visit https://github.com/prometheus/prometheus/releases, copy the exact tag of the latest stable release, and replace PROM_VERSION in the command above before re-running.
+Official docs: https://prometheus.io/docs/prometheus/latest/installation/
+# Official Node Exporter releases: https://github.com/prometheus/node_exporter/releases
+NODE_VERSION="1.8.0"
+cd /tmp
+curl -fsSL "https://github.com/prometheus/node_exporter/releases/download/v${NODE_VERSION}/node_exporter-${NODE_VERSION}.linux-amd64.tar.gz" \
+    -o node_exporter.tar.gz
+tar -xzf node_exporter.tar.gz
+sudo cp "node_exporter-${NODE_VERSION}.linux-amd64/node_exporter" /usr/local/bin/node_exporter
+sudo chown prometheus:prometheus /usr/local/bin/node_exporter
+Troubleshoot this step:
+
+Error seen: tar: node_exporter-X.Y.Z.linux-amd64: Cannot open: No such file or directory after extraction.
+Recovery: The download likely failed silently â check file size with ls -lh /tmp/node_exporter.tar.gz; if it is under 1 MB the URL returned an error page. Verify the version at https://github.com/prometheus/node_exporter/releases and re-run the curl command.
+Official docs: https://prometheus.io/docs/guides/node-exporter/
+Step 1.3: Start All Services and Confirm Reachability
+Write the Prometheus configuration file and systemd unit files for Prometheus, Node Exporter, and Grafana, then start all services. Confirmation: every service must report active (running) and each port must respond to a local HTTP probe before you proceed to Task 2.
+
+# Prometheus scrape configuration â targets added in Task 2
+sudo tee /etc/prometheus/prometheus.yml <<'EOF'
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alert_rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["localhost:9093"]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: node-exporter
+    static_configs:
+      - targets: ["localhost:9100"]
+
+  - job_name: cloud-simulator
+    static_configs:
+      - targets: ["localhost:9106"]
+EOF
+
+sudo chown prometheus:prometheus /etc/prometheus/prometheus.yml
+
+# Create an empty alert rules file so Prometheus starts without errors
+sudo tee /etc/prometheus/alert_rules.yml <<'EOF'
+groups: []
+EOF
+sudo chown prometheus:prometheus /etc/prometheus/alert_rules.yml
+# Prometheus systemd unit
+sudo tee /etc/systemd/system/prometheus.service <<'EOF'
+[Unit]
+Description=Prometheus
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=prometheus
+Group=prometheus
+Type=simple
+ExecStart=/usr/local/bin/prometheus \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --storage.tsdb.path=/var/lib/prometheus \
+  --web.console.templates=/etc/prometheus/consoles \
+  --web.console.libraries=/etc/prometheus/console_libraries \
+  --web.listen-address=0.0.0.0:9090 \
+  --web.enable-lifecycle
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Node Exporter systemd unit
+sudo tee /etc/systemd/system/node_exporter.service <<'EOF'
+[Unit]
+Description=Node Exporter
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=prometheus
+Group=prometheus
+Type=simple
+ExecStart=/usr/local/bin/node_exporter \
+  --collector.systemd \
+  --collector.processes
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now prometheus node_exporter grafana-server
+# Verify all three services are running
+sudo systemctl is-active prometheus node_exporter grafana-server
+
+# Probe each HTTP endpoint â all three must return HTTP 200
+curl -fsSL -o /dev/null -w "Prometheus:  %{http_code}\n" http://localhost:9090/-/healthy
+curl -fsSL -o /dev/null -w "NodeExporter:%{http_code}\n" http://localhost:9100/metrics
+curl -fsSL -o /dev/null -w "Grafana:     %{http_code}\n" http://localhost:3000/api/health
+Confirmation: all three lines print 200. If any service is not active, run sudo journalctl -u <service-name> -n 40 --no-pager to read the failure reason before continuing.
+
+Task 2: Build the Cloud Metrics Simulator and Wire Grafana Dashboards
+Step 2.1: Implement the Cloud Metrics Simulator
+Design and deploy a Python HTTP server that exposes Prometheus-format metrics on port 9106, simulating the telemetry a real CloudWatch exporter would produce. The simulator must satisfy these constraints:
+
+Expose a /metrics endpoint that returns valid Prometheus text exposition format (each line: metric_name{label="value"} numeric_value)
+Emit at minimum the metric families listed in the interface contract below â label names and cardinality are your design decision
+Run as a systemd service under the prometheus user so it restarts automatically on failure
+Produce non-static values: each scrape must return freshly sampled random values within realistic operating ranges so time-series graphs show movement
+# Interface contract â implement all methods; internals are your choice
+class CloudMetricsSimulator:
+    def get_ec2_metrics(self) -> list[str]:
+        """
+        Returns Prometheus-format lines for:
+          aws_ec2_cpu_utilization    (0.0 â 100.0, percent)
+          aws_ec2_memory_utilization (0.0 â 100.0, percent)
+          aws_ec2_network_in_bytes   (positive float, bytes/s)
+          aws_ec2_network_out_bytes  (positive float, bytes/s)
+          aws_ec2_disk_utilization   (0.0 â 100.0, percent)
+        Each metric must carry at minimum: instance_id, region labels.
+        """
+        ...
+
+    def get_rds_metrics(self) -> list[str]:
+        """
+        Returns Prometheus-format lines for:
+          aws_rds_cpu_utilization  (0.0 â 100.0, percent)
+          aws_rds_connections      (integer, 0 â 500)
+          aws_rds_free_storage_bytes (positive float, bytes)
+        Each metric must carry at minimum: db_instance, engine labels.
+        """
+        ...
+
+    def get_elb_metrics(self) -> list[str]:
+        """
+        Returns Prometheus-format lines for:
+          aws_elb_request_count  (integer, requests per scrape interval)
+          aws_elb_latency_seconds (0.001 â 5.0, seconds)
+          aws_elb_healthy_hosts  (integer, 0 â 10)
+        Each metric must carry at minimum: load_balancer, region labels.
+        """
+        ...
+
+    def get_s3_metrics(self) -> list[str]:
+        """
+        Returns Prometheus-format lines for:
+          aws_s3_bucket_size_bytes   (positive float, bytes)
+          aws_s3_number_of_objects   (integer)
+        Each metric must carry at minimum: bucket_name, region labels.
+        """
+        ...
+
+    def render_all(self) -> str:
+        """Concatenates all metric families into a single response body."""
+        ...
+After deploying the simulator as a systemd service, confirm it is reachable:
+
+# All metric families must appear in the output
+curl -fsSL http://localhost:9106/metrics | grep -E "^aws_"
+Confirmation: you see lines beginning with aws_ec2_, aws_rds_, aws_elb_, and aws_s3_ with numeric values. Then reload Prometheus to pick up the new scrape target and verify it appears as UP:
+
+# Signal Prometheus to reload its configuration without restarting
+curl -fsSL -X POST http://localhost:9090/-/reload
+
+# Check target state â cloud-simulator must show state="up"
+curl -fsSL "http://localhost:9090/api/v1/targets" \
+    | python3 -c "
+import sys, json
+targets = json.load(sys.stdin)['data']['activeTargets']
+for t in targets:
+    print(t['labels'].get('job'), t['health'])
+"
+Step 2.2: Configure Grafana Data Source and Build Dashboards via the HTTP API
+Register Prometheus as Grafana's default data source and create three dashboards â one per cloud service group â using the Grafana HTTP API. Each dashboard must satisfy the panel requirements in the contract below. You choose panel types, PromQL expressions, thresholds, and layout; the contract specifies only what must be observable.
+
+# Dashboard panel contract â each dashboard must contain at minimum these panels
+DASHBOARD_REQUIREMENTS: dict[str, list[dict]] = {
+    "EC2 Instance Monitoring": [
+        {"title": "CPU Utilization",    "must_show": "aws_ec2_cpu_utilization",    "unit": "percent"},
+        {"title": "Memory Utilization", "must_show": "aws_ec2_memory_utilization", "unit": "percent"},
+        {"title": "Network I/O",        "must_show": ["aws_ec2_network_in_bytes", "aws_ec2_network_out_bytes"], "unit": "Bps"},
+        {"title": "Disk Utilization",   "must_show": "aws_ec2_disk_utilization",   "unit": "percent"},
+    ],
+    "RDS and ELB Monitoring": [
+        {"title": "DB CPU",             "must_show": "aws_rds_cpu_utilization",    "unit": "percent"},
+        {"title": "DB Connections",     "must_show": "aws_rds_connections",        "unit": "short"},
+        {"title": "Free Storage",       "must_show": "aws_rds_free_storage_bytes", "unit": "bytes"},
+        {"title": "ELB Request Rate",   "must_show": "aws_elb_request_count",      "unit": "short"},
+        {"title": "ELB Latency",        "must_show": "aws_elb_latency_seconds",    "unit": "s"},
+    ],
+    "Infrastructure Overview": [
+        {"title": "Host CPU",           "must_show": "node_cpu_seconds_total",     "unit": "percent"},
+        {"title": "Host Memory",        "must_show": "node_memory_MemAvailable_bytes", "unit": "percent"},
+        {"title": "Host Disk",          "must_show": "node_filesystem_avail_bytes","unit": "percent"},
+        {"title": "Service Status",     "must_show": "up",                         "unit": "none"},
+    ],
+}
+Use the Grafana HTTP API (POST /api/datasources, POST /api/dashboards/db) with basic auth admin:admin (change the password on first login). All API calls must be idempotent â re-running your script must not create duplicate dashboards.
+
+Confirmation: navigate to http://<your-ec2-public-ip>:3000 in a browser, log in, and verify all three dashboards appear under the Dashboards menu with live data in every panel.
+
+Task 3: Implement Alerting with Alertmanager
+Step 3.1: Deploy Alertmanager and Define Alert Rules
+Alertmanager (the component that receives firing alerts from Prometheus and routes them to receivers) must be installed as a systemd service on port 9093. Define Prometheus alerting rules that fire under the conditions in the contract below. The routing tree and receiver configuration are your design decision; at minimum configure one working receiver (a webhook receiver pointed at a local netcat listener is acceptable for lab validation).
+
+# Alert rule contract â implement all rules in /etc/prometheus/alert_rules.yml
+REQUIRED_ALERT_RULES: list[dict] = [
+    {
+        "alert":    "HighEC2CPU",
+        "expr":     "aws_ec2_cpu_utilization > 85",
+        "for":      "1m",
+        "severity": "warning",
+        "summary":  "EC2 instance CPU above 85% for 1 minute",
+    },
+    {
+        "alert":    "HighEC2Memory",
+        "expr":     "aws_ec2_memory_utilization > 80",
+        "for":      "1m",
+        "severity": "warning",
+        "summary":  "EC2 instance memory above 80% for 1 minute",
+    },
+    {
+        "alert":    "LowRDSStorage",
+        "expr":     "aws_rds_free_storage_bytes < 2000000",
+        "for":      "2m",
+        "severity": "critical",
+        "summary":  "RDS free storage below 2 MB for 2 minutes",
+    },
+    {
+        "alert":    "ELBHighLatency",
+        "expr":     "aws_elb_latency_seconds > 2",
+        "for":      "1m",
+        "severity": "warning",
+        "summary":  "ELB latency above 2 seconds for 1 minute",
+    },
+    {
+        "alert":    "TargetDown",
+        "expr":     "up == 0",
+        "for":      "30s",
+        "severity": "critical",
+        "summary":  "A monitored target has been unreachable for 30 seconds",
+    },
+]
+After writing the rules file, validate it before reloading Prometheus:
+
+# promtool exits non-zero and prints errors if any rule is malformed
+sudo /usr/local/bin/promtool check rules /etc/prometheus/alert_rules.yml
+Confirmation: promtool prints SUCCESS: X rules found with no errors.
+
+Step 3.2: Configure Grafana Alerting and Verify End-to-End Alert Flow
+Grafana's unified alerting system (introduced in Grafana 9) can independently evaluate alert rules against a data source and send notifications through its own contact points â this is separate from Prometheus/Alertmanager alerting. Configure both layers:
+
+In Prometheus/Alertmanager: confirm at least one rule transitions to FIRING state by temporarily adjusting the simulator to emit a value that crosses a threshold, then restore normal ranges
+In Grafana: create at least one Grafana-native alert rule on the aws_ec2_cpu_utilization metric with a contact point that logs to Grafana's alert history (no external email required)
+To force a threshold crossing for testing, modify your simulator to emit a fixed value above the alert threshold for 90 seconds, then revert. Check alert state via the Prometheus API:
+
+# List all currently active alerts â HighEC2CPU should appear while simulator emits > 85
+curl -fsSL http://localhost:9090/api/v1/alerts \
+    | python3 -c "
+import sys, json
+alerts = json.load(sys.stdin)['data']['alerts']
+for a in alerts:
+    print(a['labels']['alertname'], a['state'])
+"
+Confirmation: HighEC2CPU appears with state firing during the test window, then disappears after you restore normal simulator output. In Grafana, the alert history panel under Alerting shows at least one state transition event.
+
+Expected Outcomes
+Three live Grafana dashboards display continuously updating metrics from the cloud simulator and Node Exporter, with all panels showing data and no "No data" placeholders
+At least one Prometheus alert rule transitions through pending to firing and back to inactive during the forced threshold test, confirming the full Prometheus -> Alertmanager -> Grafana alert pipeline is operational
+Troubleshooting
+If a Grafana panel shows "No data" despite the simulator running, what would you inspect in the Prometheus Targets page (http://localhost:9090/targets) and in the Grafana data source query inspector to determine whether the problem is a scrape failure, a label mismatch in your PromQL expression, or a data source misconfiguration?
+If an alert rule stays in pending state indefinitely and never transitions to firing, what properties of the rule definition, the simulator's output range, and the Prometheus evaluation interval would you examine to identify whether the condition is never actually being met or whether the for duration is simply not elapsing?
+Conclusion
+This lab built a complete observability pipeline from an empty Ubuntu instance: a metrics simulator representing cloud services fed Prometheus, which backed Grafana dashboards and drove threshold-based alerts through Alertmanager. The architecture you assembled â exporter, time-series database, visualization layer, and alert router as independent services â mirrors the separation of concerns used in production monitoring stacks. Extending this to real AWS CloudWatch data requires only replacing the simulator with an authenticated CloudWatch exporter; every other component remains identical.
