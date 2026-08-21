@@ -1,0 +1,211 @@
+ Version Control for Grafana Dashboards
+Objectives
+Design and operate a Git-backed dashboard lifecycle system that exports, versions, and restores Grafana dashboards through a scriptable API layer
+Implement a multi-branch workflow that isolates experimental dashboard changes from production state and supports tagged releases
+Build an automated backup and diff pipeline that compares dashboard JSON across Git refs and restores any historical version to a live Grafana instance
+Prerequisites
+Comfort with Linux shell scripting, file permissions, and process management on Ubuntu
+Familiarity with Git branching, tagging, and the git checkout <ref> -- <file> restore pattern
+Understanding of REST API concepts including HTTP verbs, authentication headers, and JSON response parsing
+Lab Environment
+You will work on a dedicated AWS EC2 Ubuntu instance provided by Al Nafi. The instance has a base Ubuntu installation; you will install all required tools in Task 1.
+
+Task 1: Provision the Environment
+Step 1.1: Install Runtime Dependencies
+Your system requires Git, Docker, curl, and jq (a command-line JSON processor). Install them from the Ubuntu package index, then start the Docker daemon and grant your user socket access so subsequent docker commands run without sudo.
+
+sudo apt-get update -y
+sudo apt-get install -y git docker.io curl jq tree
+
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
+newgrp docker
+Confirm success by running each binary with its version flag. All four must print a version string with exit code 0.
+
+git --version && docker --version && curl --version | head -1 && jq --version
+Troubleshoot this step:
+
+You may see E: Package 'docker.io' has no installation candidate if the package index is stale.
+Re-run sudo apt-get update -y and retry; if the package name has changed, consult the official Docker Engine install guide.
+Official guide: https://docs.docker.com/engine/install/ubuntu/
+Step 1.2: Deploy Grafana and Initialise the Git Repository
+Deploy Grafana as a Docker container with a host-mounted volume for persistence. Grafana (an open-source metrics visualisation platform) stores dashboard state in its internal SQLite database inside /var/lib/grafana; mounting that path to the host ensures data survives container restarts.
+
+The directory that Docker mounts must be owned by UID 472, which is the non-root user Grafana runs as inside the container.
+
+mkdir -p "$HOME/grafana-vc/data" "$HOME/grafana-vc/repo"
+sudo chown -R 472:472 "$HOME/grafana-vc/data"
+
+docker run -d \
+  --name grafana \
+  -p 3000:3000 \
+  -v "$HOME/grafana-vc/data:/var/lib/grafana" \
+  -e GF_SECURITY_ADMIN_PASSWORD=LabPass99 \
+  grafana/grafana:latest
+Official Grafana Docker image reference: https://hub.docker.com/r/grafana/grafana
+
+Wait for the HTTP health endpoint to return "ok" before proceeding.
+
+until curl -fsSL http://localhost:3000/api/health | jq -e '.database == "ok"' > /dev/null 2>&1; do
+  echo "Waiting for Grafana..."; sleep 5
+done
+echo "Grafana is ready"
+Troubleshoot this step:
+
+The loop may hang indefinitely if the container exited immediately after start, producing no HTTP listener on port 3000.
+Run docker logs grafana to inspect startup errors; a common cause is the data directory having wrong ownership â verify with ls -ln "$HOME/grafana-vc/data" and confirm the owner UID is 472.
+Official guide: https://grafana.com/docs/grafana/latest/setup-grafana/installation/docker/
+Initialise the Git repository with a three-environment directory layout and an initial commit.
+
+cd "$HOME/grafana-vc/repo"
+git init
+git config user.name "Dashboard Engineer"
+git config user.email "engineer@lab.local"
+
+mkdir -p dashboards/production dashboards/staging dashboards/development backups
+
+cat > README.md << 'EOF'
+# Grafana Dashboard Version Control
+
+## Layout
+- dashboards/production/  â live dashboards
+- dashboards/staging/     â pre-release candidates
+- dashboards/development/ â experimental work
+
+## Workflow
+Export from Grafana -> commit to branch -> tag release -> merge to production
+EOF
+
+cat > .gitignore << 'EOF'
+*.bak
+*.tmp
+backups/
+EOF
+
+git add .
+git commit -m "chore: initialise dashboard repository structure"
+git checkout -b development
+git checkout -b staging
+git checkout main
+Confirm: git branch lists development, staging, and main; git log --oneline shows one commit.
+
+Task 2: Build the Dashboard Version Control Pipeline
+Step 2.1: Implement Export, Import, and Diff Contracts
+Your pipeline must satisfy the following interface contract. Each script is a standalone executable that reads from Grafana's HTTP API and writes to the Git working tree, or vice versa. Students own all implementation decisions â the contract below defines only the required callable surface.
+
+# export-dashboard.sh <uid> <environment>
+#   Fetches /api/dashboards/uid/<uid>, strips the mutable fields (.id, .version),
+#   writes the result to dashboards/<environment>/<slug>.json where <slug> is the
+#   dashboard title lowercased with non-alphanumeric characters replaced by hyphens.
+#   Exit 0 on success, non-zero with a human-readable message on failure.
+
+# import-dashboard.sh <json-file>
+#   Reads a bare dashboard JSON file (no envelope), wraps it in the POST body
+#   { "dashboard": <content>, "folderId": 0, "overwrite": true }, and POSTs to
+#   /api/dashboards/db. Prints the resulting dashboard URL on success.
+#   Exit 0 on success, non-zero on HTTP or JSON error.
+
+# diff-dashboards.sh <git-ref-A> <git-ref-B> <json-file>
+#   Extracts the file at each ref with `git show`, then emits a structured
+#   comparison: panel count delta, tag delta, and a unified diff of the JSON.
+#   Must not leave temporary files behind on exit (use a trap).
+The type contract for the JSON envelope your import script must construct:
+
+{
+  "dashboard": "<object â bare dashboard JSON with no id or version fields>",
+  "folderId": 0,
+  "overwrite": true
+}
+Place all three scripts in $HOME/grafana-vc/repo/ and make them executable. Confirm: ls -l *.sh shows -rwxr-xr-x for each file.
+
+Step 2.2: Seed Production Dashboards and Tag a Release
+Using the Grafana API, create two dashboards â one named Infrastructure Overview and one named Application Latency â by POSTing valid dashboard JSON to /api/dashboards/db. Each dashboard must contain at least two panels of different types (for example, stat and timeseries). Panel queries may use any valid PromQL expression; the panels do not need live data to satisfy this requirement.
+
+After both dashboards exist in Grafana, use your export-dashboard.sh script to write them into dashboards/production/, commit the result on main, and tag the commit v1.0.0.
+
+# Retrieve all dashboard UIDs to confirm both dashboards are present before exporting
+curl -fsSL -u admin:LabPass99 http://localhost:3000/api/search | \
+  jq -r '.[] | [.uid, .title] | @tsv'
+Official Grafana dashboard API reference: https://grafana.com/docs/grafana/latest/developers/http_api/dashboard/
+
+Confirm: git tag prints v1.0.0; git show v1.0.0 --stat lists both JSON files.
+
+Step 2.3: Evolve Dashboards on a Feature Branch and Merge
+On the development branch, modify Infrastructure Overview to add a third panel and change the default time range from now-1h to now-6h. Export the updated dashboard into dashboards/development/, commit with a descriptive message, then open a simulated merge review by running diff-dashboards.sh v1.0.0 HEAD dashboards/development/infrastructure-overview.json.
+
+After confirming the diff is correct, merge development into main using --no-ff (no fast-forward, which preserves the branch topology in the log), export the final state into dashboards/production/, commit, and tag v2.0.0.
+
+# Skeleton for the merge sequence â students supply the surrounding context
+git checkout main
+git merge --no-ff development -m "feat: promote infrastructure-overview v2 to production"
+Confirm: git log --oneline --graph main shows a merge commit; git tag lists both v1.0.0 and v2.0.0.
+
+Task 3: Implement Rollback and Automated Backup
+Step 3.1: Implement the Rollback Contract
+Your rollback script must satisfy this contract:
+
+# rollback-dashboard.sh <json-file> <git-ref>
+#   1. Validates that <json-file> exists in the working tree and <git-ref> is
+#      resolvable with `git rev-parse --verify`.
+#   2. Writes a timestamped backup of the current file to backups/ before
+#      modifying anything (backups/ is in .gitignore and is never committed).
+#   3. Runs `git checkout <git-ref> -- <json-file>` to restore the historical
+#      version into the working tree.
+#   4. Calls import-dashboard.sh on the restored file to push it to Grafana.
+#   5. Stages and commits the restored file with a message that records the
+#      target ref and the operator's reason (read from stdin if not supplied
+#      as a third argument).
+#   Exit non-zero and restore the backup if any step fails.
+Demonstrate the rollback by reverting Infrastructure Overview from v2.0.0 back to v1.0.0, then verify in Grafana that the dashboard now shows only two panels.
+
+# Verify panel count via API after rollback
+curl -fsSL -u admin:LabPass99 \
+  "http://localhost:3000/api/dashboards/uid/$(
+    curl -fsSL -u admin:LabPass99 http://localhost:3000/api/search |
+    jq -r '.[] | select(.title=="Infrastructure Overview") | .uid'
+  )" | jq '.dashboard.panels | length'
+Expected output: 2
+
+Step 3.2: Implement the Automated Backup Contract
+Your backup script must satisfy this contract:
+
+# backup-all-dashboards.sh
+#   1. Queries /api/search?type=dash-db to enumerate every dashboard in Grafana.
+#   2. For each dashboard, fetches /api/dashboards/uid/<uid> and writes the
+#      stripped JSON (no .id, no .version) to backups/<ISO-date>/<slug>.json.
+#   3. Writes a manifest file backups/<ISO-date>/manifest.json containing an
+#      array of objects: { "uid": "...", "title": "...", "slug": "...",
+#      "file": "...", "exported_at": "<RFC-3339 timestamp>" }.
+#   4. Prints a summary line: "Backed up N dashboards to backups/<ISO-date>/".
+#   The backups/ directory is excluded from Git via .gitignore; this script
+#   must never call `git add` or `git commit`.
+The manifest type contract:
+
+[
+  {
+    "uid": "string",
+    "title": "string",
+    "slug": "string â title lowercased, non-alphanumeric replaced with hyphens",
+    "file": "string â relative path to the JSON file within the backup directory",
+    "exported_at": "string â RFC-3339 timestamp"
+  }
+]
+Run the backup script and confirm the manifest is valid JSON with exactly as many entries as dashboards returned by /api/search.
+
+BACKUP_DATE=$(date +%Y-%m-%d)
+MANIFEST="$HOME/grafana-vc/repo/backups/${BACKUP_DATE}/manifest.json"
+DASHBOARD_COUNT=$(curl -fsSL -u admin:LabPass99 \
+  "http://localhost:3000/api/search?type=dash-db" | jq 'length')
+MANIFEST_COUNT=$(jq 'length' "$MANIFEST")
+echo "API count: $DASHBOARD_COUNT | Manifest count: $MANIFEST_COUNT"
+[ "$DASHBOARD_COUNT" -eq "$MANIFEST_COUNT" ] && echo "PASS" || echo "FAIL"
+Expected Outcomes
+The Git repository on main contains tagged releases v1.0.0 and v2.0.0, a rollback commit, and a log that accurately reflects the full dashboard lifecycle from creation through rollback.
+All five scripts (export-dashboard.sh, import-dashboard.sh, diff-dashboards.sh, rollback-dashboard.sh, backup-all-dashboards.sh) operate idempotently and exit non-zero with a diagnostic message on any failure.
+Troubleshooting
+If import-dashboard.sh returns an HTTP 422 or a JSON body containing "message": "Dashboard title cannot be empty", what does that tell you about the structure of the JSON file being read, and how would you inspect the exact bytes being sent to the API before the request is made?
+
+If rollback-dashboard.sh restores the file in the working tree but the panel count in Grafana does not change after the import step, what are the two most likely causes â one on the script side and one on the Grafana API side â and what single curl command would help you distinguish between them?
+
+Conclusion
+This lab established a production-grade pattern for treating Grafana dashboards as versioned infrastructure artifacts: exported to JSON, committed to Git with semantic tags, and restorable to any historical state through a scriptable rollback mechanism. The multi-branch workflow mirrors standard software delivery practices and scales to team environments where dashboard changes require review before promotion to production. Automated backup with a structured manifest provides an audit trail that is independent of Git history and can be used for disaster recovery without access to the repository.
