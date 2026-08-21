@@ -1,0 +1,529 @@
+ Grafana with Loki for Logs
+Lab Objectives
+By the end of this lab, you will be able to:
+
+Install and configure Loki log aggregation system
+Set up Grafana for log visualization
+Connect Loki as a data source in Grafana
+Create comprehensive dashboards to visualize log data
+Configure log collection from system services
+Implement log queries and filters for effective monitoring
+Understand the architecture of modern log management systems
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Linux command line operations
+Familiarity with system logs and log formats
+Basic knowledge of YAML configuration files
+Understanding of web-based interfaces
+Knowledge of basic networking concepts (ports, localhost)
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated Linux machine. The provided machine is bare metal with no pre-installed tools, so you will install all required components during the lab exercises.
+
+Task 1: Install Loki and Connect it to Grafana
+Subtask 1.1: System Preparation and Updates
+First, let's prepare the system by updating packages and installing necessary dependencies.
+
+# Update system packages
+sudo apt update && sudo apt upgrade -y
+
+# Install required dependencies
+sudo apt install -y wget curl unzip software-properties-common apt-transport-https
+Subtask 1.2: Install Loki
+Loki is a horizontally-scalable, highly-available log aggregation system inspired by Prometheus.
+
+# Create a directory for Loki
+sudo mkdir -p /opt/loki
+cd /opt/loki
+
+# Download the latest Loki binary
+wget https://github.com/grafana/loki/releases/download/v2.9.2/loki-linux-amd64.zip
+
+# Extract the binary
+unzip loki-linux-amd64.zip
+
+# Make it executable
+sudo chmod +x loki-linux-amd64
+
+# Move to system binary directory
+sudo mv loki-linux-amd64 /usr/local/bin/loki
+
+# Verify installation
+loki --version
+Subtask 1.3: Configure Loki
+Create a configuration file for Loki with appropriate settings.
+
+# Create Loki configuration directory
+sudo mkdir -p /etc/loki
+
+# Create Loki configuration file
+sudo tee /etc/loki/loki.yml > /dev/null <<EOF
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+
+common:
+  path_prefix: /tmp/loki
+  storage:
+    filesystem:
+      chunks_directory: /tmp/loki/chunks
+      rules_directory: /tmp/loki/rules
+  replication_factor: 1
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+
+query_range:
+  results_cache:
+    cache:
+      embedded_cache:
+        enabled: true
+        max_size_mb: 100
+
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: boltdb-shipper
+      object_store: filesystem
+      schema: v11
+      index:
+        prefix: index_
+        period: 24h
+
+ruler:
+  alertmanager_url: http://localhost:9093
+
+# By default, Loki will send anonymous, but uniquely-identifiable usage and configuration
+# analytics to Grafana Labs. These statistics are sent to https://stats.grafana.org/
+#
+# Statistics help us better understand how Loki is used, and they show us performance
+# levels for most users. This helps us prioritize features and documentation.
+# For more information on what's sent, look at
+# https://github.com/grafana/loki/blob/main/pkg/usagestats/stats.go
+# Refer to the buildReport method to see what goes into a report.
+#
+# If you would like to disable reporting, uncomment the following lines:
+#analytics:
+#  reporting_enabled: false
+EOF
+Subtask 1.4: Create Loki Service
+Create a systemd service file to manage Loki as a system service.
+
+# Create systemd service file for Loki
+sudo tee /etc/systemd/system/loki.service > /dev/null <<EOF
+[Unit]
+Description=Loki service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/loki -config.file /etc/loki/loki.yml
+Restart=on-failure
+RestartSec=20
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=loki
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Reload systemd and start Loki
+sudo systemctl daemon-reload
+sudo systemctl enable loki
+sudo systemctl start loki
+
+# Check Loki status
+sudo systemctl status loki
+Subtask 1.5: Install Promtail (Log Shipper)
+Promtail is the agent responsible for gathering logs and sending them to Loki.
+
+# Download Promtail
+cd /opt
+sudo wget https://github.com/grafana/loki/releases/download/v2.9.2/promtail-linux-amd64.zip
+
+# Extract Promtail
+sudo unzip promtail-linux-amd64.zip
+
+# Make executable and move to system directory
+sudo chmod +x promtail-linux-amd64
+sudo mv promtail-linux-amd64 /usr/local/bin/promtail
+
+# Verify installation
+promtail --version
+Subtask 1.6: Configure Promtail
+Create configuration for Promtail to collect system logs.
+
+# Create Promtail configuration directory
+sudo mkdir -p /etc/promtail
+
+# Create Promtail configuration file
+sudo tee /etc/promtail/promtail.yml > /dev/null <<EOF
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://localhost:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: system
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: varlogs
+          __path__: /var/log/*log
+
+  - job_name: syslog
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: syslog
+          __path__: /var/log/syslog
+
+  - job_name: auth
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: auth
+          __path__: /var/log/auth.log
+
+  - job_name: nginx
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: nginx
+          __path__: /var/log/nginx/*.log
+EOF
+Subtask 1.7: Create Promtail Service
+# Create systemd service file for Promtail
+sudo tee /etc/systemd/system/promtail.service > /dev/null <<EOF
+[Unit]
+Description=Promtail service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/promtail -config.file /etc/promtail/promtail.yml
+Restart=on-failure
+RestartSec=20
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=promtail
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Start Promtail service
+sudo systemctl daemon-reload
+sudo systemctl enable promtail
+sudo systemctl start promtail
+
+# Check Promtail status
+sudo systemctl status promtail
+Subtask 1.8: Install Grafana
+Now let's install Grafana to visualize our logs.
+
+# Add Grafana GPG key
+wget -q -O - https://packages.grafana.com/gpg.key | sudo apt-key add -
+
+# Add Grafana repository
+echo "deb https://packages.grafana.com/oss/deb stable main" | sudo tee -a /etc/apt/sources.list.d/grafana.list
+
+# Update package list and install Grafana
+sudo apt update
+sudo apt install -y grafana
+
+# Start and enable Grafana service
+sudo systemctl daemon-reload
+sudo systemctl enable grafana-server
+sudo systemctl start grafana-server
+
+# Check Grafana status
+sudo systemctl status grafana-server
+Subtask 1.9: Verify Services are Running
+Let's verify that all our services are running correctly.
+
+# Check all service statuses
+echo "=== Loki Status ==="
+sudo systemctl status loki --no-pager -l
+
+echo "=== Promtail Status ==="
+sudo systemctl status promtail --no-pager -l
+
+echo "=== Grafana Status ==="
+sudo systemctl status grafana-server --no-pager -l
+
+# Check if services are listening on expected ports
+echo "=== Port Status ==="
+sudo netstat -tlnp | grep -E "(3100|9080|3000)"
+Subtask 1.10: Access Grafana Web Interface
+# Get the machine's IP address
+ip addr show | grep "inet " | grep -v 127.0.0.1
+
+echo "Grafana is accessible at: http://localhost:3000"
+echo "Default credentials: admin/admin"
+Open your web browser and navigate to http://localhost:3000. Log in with:
+
+Username: admin
+Password: admin
+You will be prompted to change the password on first login.
+
+Task 2: Create Dashboards to Visualize Log Data
+Subtask 2.1: Add Loki as Data Source
+In Grafana, click on the gear icon (Configuration) in the left sidebar
+Select Data Sources
+Click Add data source
+Select Loki from the list
+Configure the data source:
+Name: Loki
+URL: http://localhost:3100
+Leave other settings as default
+Click Save & Test
+You should see a green message saying "Data source connected and labels found."
+
+Subtask 2.2: Generate Sample Log Data
+Let's generate some sample log data to work with.
+
+# Create a script to generate sample logs
+sudo tee /opt/generate_logs.sh > /dev/null <<'EOF'
+#!/bin/bash
+
+# Function to generate random log entries
+generate_logs() {
+    local services=("nginx" "apache2" "mysql" "redis" "mongodb")
+    local levels=("INFO" "WARN" "ERROR" "DEBUG")
+    local messages=(
+        "User authentication successful"
+        "Database connection established"
+        "Cache miss for key"
+        "Request processed successfully"
+        "Configuration reloaded"
+        "Service started"
+        "Connection timeout"
+        "Invalid request format"
+        "Memory usage high"
+        "Disk space low"
+    )
+    
+    while true; do
+        service=${services[$RANDOM % ${#services[@]}]}
+        level=${levels[$RANDOM % ${#levels[@]}]}
+        message=${messages[$RANDOM % ${#messages[@]}]}
+        timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+        
+        echo "[$timestamp] [$level] [$service] $message" >> /var/log/sample_app.log
+        sleep $(($RANDOM % 5 + 1))
+    done
+}
+
+generate_logs
+EOF
+
+# Make the script executable
+sudo chmod +x /opt/generate_logs.sh
+
+# Run the log generator in background
+sudo nohup /opt/generate_logs.sh > /dev/null 2>&1 &
+
+echo "Log generator started. Sample logs will be written to /var/log/sample_app.log"
+Subtask 2.3: Update Promtail Configuration for Sample Logs
+# Add sample app logs to Promtail configuration
+sudo tee -a /etc/promtail/promtail.yml > /dev/null <<EOF
+
+  - job_name: sample_app
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: sample_app
+          __path__: /var/log/sample_app.log
+EOF
+
+# Restart Promtail to pick up new configuration
+sudo systemctl restart promtail
+
+# Verify Promtail is still running
+sudo systemctl status promtail
+Subtask 2.4: Create Your First Log Dashboard
+In Grafana, click the + icon in the left sidebar
+Select Dashboard
+Click Add new panel
+In the query editor:
+Select Loki as the data source
+Enter the query: {job="sample_app"}
+In the panel options:
+Title: Sample Application Logs
+Visualization: Logs
+Click Apply
+Subtask 2.5: Create System Logs Panel
+Click Add panel to add another panel
+Configure the query:
+Data source: Loki
+Query: {job="syslog"}
+Panel settings:
+Title: System Logs
+Visualization: Logs
+Click Apply
+Subtask 2.6: Create Log Level Analysis Panel
+Add another panel
+Configure the query:
+Data source: Loki
+Query: sum by (level) (count_over_time({job="sample_app"} |~ "\\[(INFO|WARN|ERROR|DEBUG)\\]" [5m]))
+Panel settings:
+Title: Log Levels Distribution
+Visualization: Pie chart
+Click Apply
+Subtask 2.7: Create Authentication Logs Panel
+Add another panel
+Configure the query:
+Data source: Loki
+Query: {job="auth"}
+Panel settings:
+Title: Authentication Logs
+Visualization: Logs
+Click Apply
+Subtask 2.8: Save the Dashboard
+Click the save icon (disk) at the top of the dashboard
+Enter dashboard details:
+Name: Log Management Dashboard
+Description: Comprehensive log monitoring and analysis
+Click Save
+Subtask 2.9: Create Advanced Log Queries
+Let's explore more advanced log queries. Create a new panel with these examples:
+
+Error Logs Only:
+
+{job="sample_app"} |~ "ERROR"
+Logs from Last Hour:
+
+{job="sample_app"}[1h]
+Count of Logs by Service:
+
+sum by (service) (count_over_time({job="sample_app"} | regexp "\\[(?P<service>\\w+)\\]" [5m]))
+Subtask 2.10: Set Up Log Alerts
+Go to Alerting > Alert Rules in Grafana
+Click New rule
+Configure the alert:
+Query: count_over_time({job="sample_app"} |~ "ERROR" [5m])
+Condition: IS ABOVE 5
+Evaluation: Every 1m for 2m
+Add notification details:
+Rule name: High Error Rate
+Message: Too many errors detected in application logs
+Click Save
+Verification and Testing
+Verify Log Collection
+# Check if logs are being collected
+curl -G -s "http://localhost:3100/loki/api/v1/query" --data-urlencode 'query={job="sample_app"}' | jq
+
+# Check Loki metrics
+curl -s http://localhost:3100/metrics | grep loki_ingester_streams
+
+# View recent sample logs
+tail -f /var/log/sample_app.log
+Test Log Queries
+In Grafana's Explore section, test these queries:
+
+All logs: {job=~".+"}
+Error logs: {job="sample_app"} |~ "ERROR"
+Logs with specific service: {job="sample_app"} |~ "nginx"
+Log rate: rate({job="sample_app"}[5m])
+Troubleshooting Common Issues
+Loki Not Starting
+# Check Loki logs
+sudo journalctl -u loki -f
+
+# Verify configuration syntax
+loki -config.file /etc/loki/loki.yml -verify-config
+Promtail Not Collecting Logs
+# Check Promtail logs
+sudo journalctl -u promtail -f
+
+# Verify file permissions
+ls -la /var/log/
+
+# Test Promtail configuration
+promtail -config.file /etc/promtail/promtail.yml -dry-run
+Grafana Connection Issues
+# Check Grafana logs
+sudo journalctl -u grafana-server -f
+
+# Verify Grafana is listening
+sudo netstat -tlnp | grep 3000
+
+# Reset Grafana admin password if needed
+sudo grafana-cli admin reset-admin-password newpassword
+Advanced Configuration
+Enable Log Retention
+# Update Loki configuration for log retention
+sudo tee -a /etc/loki/loki.yml > /dev/null <<EOF
+
+limits_config:
+  retention_period: 168h  # 7 days
+
+table_manager:
+  retention_deletes_enabled: true
+  retention_period: 168h
+EOF
+
+# Restart Loki
+sudo systemctl restart loki
+Configure Log Parsing
+Add parsing rules to extract structured data from logs:
+
+# Add to promtail.yml under scrape_configs
+pipeline_stages:
+  - regex:
+      expression: '\[(?P<timestamp>.*?)\] \[(?P<level>.*?)\] \[(?P<service>.*?)\] (?P<message>.*)'
+  - labels:
+      level:
+      service:
+Performance Optimization
+Monitor Resource Usage
+# Check system resources
+htop
+
+# Monitor Loki memory usage
+ps aux | grep loki
+
+# Check disk usage for log storage
+df -h /tmp/loki/
+Optimize Queries
+Use specific label filters: {job="specific_job"} instead of {job=~".+"}
+Limit time ranges for better performance
+Use log stream selectors before log pipeline operations
+Conclusion
+In this comprehensive lab, you have successfully:
+
+Installed and configured Loki as a log aggregation system
+Set up Promtail to collect logs from various system sources
+Installed Grafana and connected it to Loki as a data source
+Created comprehensive dashboards to visualize different types of log data
+Implemented advanced log queries for filtering and analysis
+Set up log-based alerts for proactive monitoring
+Generated sample log data for testing and demonstration
+This log management stack provides a powerful, scalable solution for monitoring and analyzing logs in modern applications. The combination of Loki's efficient storage, Promtail's flexible log collection, and Grafana's rich visualization capabilities creates a complete observability solution.
+
+Key Benefits Achieved:
+
+Centralized log management from multiple sources
+Real-time log monitoring and alerting
+Efficient log storage with Loki's unique architecture
+Powerful query capabilities for log analysis
+Visual dashboards for better insights
+Cost-effective solution using open-source tools
+This setup forms the foundation for advanced log management practices and can be extended to handle logs from containerized applications, microservices, and distributed systems. The skills learned here are directly applicable to production environments and modern DevOps practices.
