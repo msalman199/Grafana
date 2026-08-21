@@ -1,0 +1,79 @@
+Grafana Cloud Integration
+Objectives
+Deploy and configure Grafana connected to a LocalStack-simulated CloudWatch data source on a bare Ubuntu instance
+Design and publish multi-panel Grafana dashboards that visualize EC2 metrics ingested from LocalStack CloudWatch
+Implement Grafana alert rules that fire when simulated CloudWatch metrics cross defined thresholds
+Prerequisites
+Comfort with Ubuntu command-line operations including service management, file editing, and process control
+Conceptual understanding of cloud monitoring: what metrics, namespaces, dimensions, and alert states mean in the context of AWS CloudWatch
+Lab Environment
+You will work on a dedicated AWS EC2 Ubuntu instance provided by Al Nafi. The instance has a base Ubuntu installation; you will install all required tools in Task 1.
+
+Task 1: Install and Verify the Full Toolchain
+Requirement 1
+Design an installation sequence that leaves the following tools operational on the instance: Docker Engine (with your user able to run docker without sudo), Docker Compose v2, AWS CLI v2, Python 3 with boto3 and localstack packages, and Grafana OSS server listening on port 3000. Every tool must be sourced from its official distribution channel. After installation, confirm each tool responds to its --version flag and that grafana-server reports active (running) under systemd.
+
+Troubleshoot this step â Docker installation:
+
+You may see E: Package 'docker.io' has no installation candidate if the universe repository is not enabled.
+Run sudo add-apt-repository universe && sudo apt-get update then retry the install.
+Official guide: https://docs.docker.com/engine/install/ubuntu/
+Troubleshoot this step â AWS CLI v2:
+
+You may see curl: (22) The requested URL returned error: 403 if the download URL has changed.
+Verify the current URL at https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html and substitute it in your command.
+Official guide: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
+Troubleshoot this step â Grafana repository:
+
+You may see E: Malformed entry 1 in list file /etc/apt/sources.list.d/grafana.list if the echo command wrote a backslash into the file.
+Inspect the file with cat /etc/apt/sources.list.d/grafana.list; it must be a single unbroken line with no backslashes â delete the file and recreate it using a heredoc or printf if it is not.
+Official guide: https://grafana.com/docs/grafana/latest/setup-grafana/installation/debian/
+Troubleshoot this step â LocalStack and boto3:
+
+You may see error: externally-managed-environment on Ubuntu 23+ when running pip3 install.
+Use pip3 install --break-system-packages localstack boto3 or create a virtual environment first with python3 -m venv ~/labenv && source ~/labenv/bin/activate.
+Official guide: https://docs.localstack.cloud/getting-started/installation/
+Requirement 2
+Start LocalStack as a Docker container exposing port 4566, with the cloudwatch and logs services enabled. Configure AWS CLI with dummy credentials (access key: test, secret key: test, region us-east-1) pointing to http://localhost:4566 as the endpoint. Confirm the environment is functional by running aws --endpoint-url=http://localhost:4566 cloudwatch list-metrics and receiving a JSON response with an HTTP 200 status rather than a connection error.
+
+Acceptance Criteria
+
+Running docker ps shows a LocalStack container in Up state, curl -fsSL http://localhost:4566/_localstack/health returns JSON where the cloudwatch key equals "available" or "running", and systemctl is-active grafana-server prints active.
+aws --endpoint-url=http://localhost:4566 cloudwatch list-metrics --output json exits with code 0 and prints a JSON object containing a "Metrics" key (the array may be empty at this stage).
+Task 2: Populate CloudWatch Metrics and Build Grafana Dashboards
+Requirement 1
+Design and implement a Python script that continuously publishes simulated EC2 metrics to LocalStack CloudWatch. The script must emit at minimum three distinct metric names (CPUUtilization in namespace AWS/EC2, MemoryUtilization in namespace System/Linux, and NetworkIn in namespace AWS/EC2), all tagged with dimension InstanceId = i-1234567890abcdef0. The script must run as a background process, write its output to a log file, and publish at least 20 data points per metric before the dashboard verification step. Values must vary across the realistic operating range for each metric (CPU and memory as percentages 0-100, NetworkIn as bytes in the range 1000-100000) so that time-series panels show non-flat lines.
+
+Troubleshoot this step â boto3 endpoint connection:
+
+You may see EndpointResolutionError or Could not connect to the endpoint URL if LocalStack is not yet healthy when the script starts.
+Add a startup check in your script that calls cloudwatch.list_metrics() in a retry loop with a 5-second sleep before entering the main publish loop.
+Official guide: https://docs.localstack.cloud/user-guide/integrations/boto3/
+Requirement 2
+Using only the Grafana HTTP API (no manual browser clicks count as a deliverable), provision a CloudWatch data source pointed at http://localhost:4566 with authentication type keys using the dummy credentials, then import two dashboards: one titled EC2 Instance Metrics containing at minimum a time-series panel for CPU, a stat panel for current memory, and a time-series panel for NetworkIn; and one titled Infrastructure Overview containing at minimum one panel that plots CPU and memory on the same axes for trend comparison. Both dashboards must set auto-refresh to 30 seconds and a default time range of the last 1 hour.
+
+Acceptance Criteria
+
+curl -fsSL -u admin:admin http://localhost:3000/api/datasources returns JSON listing a datasource of type cloudwatch with name equal to LocalStack CloudWatch, and curl -fsSL -u admin:admin "http://localhost:3000/api/search?type=dash-db" returns an array containing entries with titles EC2 Instance Metrics and Infrastructure Overview.
+aws --endpoint-url=http://localhost:4566 cloudwatch list-metrics --namespace AWS/EC2 --output json returns a Metrics array containing at least the entries CPUUtilization and NetworkIn each with dimension InstanceId; and the same command against namespace System/Linux returns MemoryUtilization â confirming the background script has successfully published data that the dashboards can query.
+Task 3: Implement Alert Rules and Validate End-to-End
+Requirement 1
+Using the Grafana Alerting API (Grafana unified alerting, not the legacy /api/alert-notifications endpoint), create an alert rule group named ec2-alerts in the default folder. The group must contain two rules: one named High CPU that fires when the average CPUUtilization over a 5-minute window exceeds 75 percent, and one named High Memory that fires when the average MemoryUtilization over a 5-minute window exceeds 80 percent. Each rule must carry a label severity=warning and an annotation summary describing which metric triggered it. Configure a contact point of type webhook named lab-webhook pointing to http://localhost:9999/alert (a non-existent endpoint is acceptable for this lab; the goal is correct configuration, not delivery).
+
+Troubleshoot this step â Grafana unified alerting API:
+
+You may see 404 Not Found on /api/ruler/grafana/api/v1/rules/default if Grafana was installed without unified alerting enabled.
+Confirm unified alerting is active with curl -fsSL -u admin:admin http://localhost:3000/api/v1/provisioning/alert-rules; if that also returns 404, add [unified_alerting] enabled = true to /etc/grafana/grafana.ini and restart the service.
+Official guide: https://grafana.com/docs/grafana/latest/alerting/set-up/
+Requirement 2
+Trigger the High CPU alert deliberately by modifying your metrics script to publish CPUUtilization values between 85 and 98 percent for a sustained period, then poll the Grafana alerting API to confirm the rule transitions from Normal to Pending or Firing state. Document the exact API response that shows the state change in a plain-text file named alert_validation.txt saved in your home directory.
+
+Acceptance Criteria
+
+curl -fsSL -u admin:admin http://localhost:3000/api/v1/provisioning/alert-rules returns a JSON array containing two objects whose title fields are High CPU and High Memory, each with labels.severity equal to warning; and curl -fsSL -u admin:admin http://localhost:3000/api/v1/provisioning/contact-points returns an array containing an entry with name equal to lab-webhook and type equal to webhook.
+curl -fsSL -u admin:admin "http://localhost:3000/api/prometheus/grafana/api/v1/rules" returns JSON where the High CPU rule shows a state of pending or firing, and the file ~/alert_validation.txt exists and contains that raw JSON response captured during the triggered state.
+Expected Outcomes
+A fully operational local observability stack consisting of LocalStack, Grafana, two populated dashboards, and two configured alert rules â all provisioned programmatically without manual UI interaction.
+Demonstrated ability to connect Grafana to a non-standard CloudWatch endpoint, publish custom metrics via the AWS SDK, and validate alert state transitions through the Grafana API.
+Conclusion
+This lab required you to assemble an observability pipeline from a bare Ubuntu instance, integrating LocalStack as a CloudWatch simulator with Grafana as the visualization and alerting layer. Every component â data ingestion, dashboard provisioning, and alert configuration â was driven through APIs and scripts, reflecting how production monitoring infrastructure is managed as code. The skills practiced here transfer directly to real AWS environments by substituting the LocalStack endpoint with genuine AWS CloudWatch credentials and region endpoints.
