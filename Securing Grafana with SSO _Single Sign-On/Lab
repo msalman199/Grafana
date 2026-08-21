@@ -1,0 +1,359 @@
+Securing Grafana with SSO (Single Sign-On)
+Lab Objectives
+By the end of this lab, you will be able to:
+
+Understand the fundamentals of Single Sign-On (SSO) authentication
+Install and configure Grafana on a Linux system
+Set up OAuth 2.0 authentication for Grafana using GitHub as an identity provider
+Configure Grafana to integrate with external OAuth providers
+Test SSO login functionality and verify secure authentication
+Troubleshoot common SSO configuration issues
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Linux command line operations
+Familiarity with web browsers and basic networking concepts
+Understanding of authentication and authorization concepts
+A GitHub account (free account is sufficient)
+Basic knowledge of configuration files and text editing
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated Linux machine. The provided machine is bare metal with no pre-installed tools, so you will install all required software during the lab exercises.
+
+Note: All tasks in this lab will be performed on a single Linux machine. No additional virtual machines or remote hosts are required.
+
+Task 1: Environment Setup and Grafana Installation
+Subtask 1.1: Update System and Install Dependencies
+First, update your system and install the necessary dependencies.
+
+# Update package repositories
+sudo apt update && sudo apt upgrade -y
+
+# Install required packages
+sudo apt install -y wget curl gnupg2 software-properties-common apt-transport-https
+Subtask 1.2: Install Grafana
+Download and install the latest version of Grafana from the official repository.
+
+# Add Grafana GPG key
+wget -q -O - https://packages.grafana.com/gpg.key | sudo apt-key add -
+
+# Add Grafana repository
+echo "deb https://packages.grafana.com/oss/deb stable main" | sudo tee -a /etc/apt/sources.list.d/grafana.list
+
+# Update package list and install Grafana
+sudo apt update
+sudo apt install -y grafana
+
+# Enable and start Grafana service
+sudo systemctl enable grafana-server
+sudo systemctl start grafana-server
+
+# Check service status
+sudo systemctl status grafana-server
+Subtask 1.3: Verify Grafana Installation
+Confirm that Grafana is running properly.
+
+# Check if Grafana is listening on port 3000
+sudo netstat -tlnp | grep :3000
+
+# Check Grafana logs
+sudo journalctl -u grafana-server -f --no-pager -n 20
+Open your web browser and navigate to http://localhost:3000. You should see the Grafana login page. The default credentials are:
+
+Username: admin
+Password: admin
+Log in and change the default password when prompted.
+
+Task 2: Configure OAuth 2.0 with GitHub
+Subtask 2.1: Create GitHub OAuth Application
+Before configuring Grafana, you need to create an OAuth application in GitHub.
+
+Log in to your GitHub account
+Navigate to Settings > Developer settings > OAuth Apps
+Click New OAuth App
+Fill in the application details:
+Application name: Grafana SSO Lab
+Homepage URL: http://localhost:3000
+Authorization callback URL: http://localhost:3000/login/github
+Click Register application
+Note down the Client ID and generate a Client Secret
+Important: Keep your Client ID and Client Secret secure. You will need them in the next step.
+
+Subtask 2.2: Configure Grafana for GitHub OAuth
+Edit the Grafana configuration file to enable GitHub OAuth authentication.
+
+# Create a backup of the original configuration
+sudo cp /etc/grafana/grafana.ini /etc/grafana/grafana.ini.backup
+
+# Edit the Grafana configuration file
+sudo nano /etc/grafana/grafana.ini
+Locate and modify the following sections in the configuration file:
+
+# Server configuration
+[server]
+http_port = 3000
+domain = localhost
+root_url = http://localhost:3000
+
+# Authentication configuration
+[auth]
+disable_login_form = false
+disable_signout_menu = false
+
+# GitHub OAuth configuration
+[auth.github]
+enabled = true
+allow_sign_up = true
+client_id = YOUR_GITHUB_CLIENT_ID
+client_secret = YOUR_GITHUB_CLIENT_SECRET
+scopes = user:email,read:org
+auth_url = https://github.com/login/oauth/authorize
+token_url = https://github.com/login/oauth/access_token
+api_url = https://api.github.com/user
+allowed_organizations = 
+team_ids = 
+allow_assign_grafana_admin = false
+role_attribute_path = 
+Replace YOUR_GITHUB_CLIENT_ID and YOUR_GITHUB_CLIENT_SECRET with the values from your GitHub OAuth application.
+
+Subtask 2.3: Configure User Roles and Permissions
+Add additional configuration for user management:
+
+# Users configuration
+[users]
+allow_sign_up = true
+allow_org_create = true
+auto_assign_org = true
+auto_assign_org_id = 1
+auto_assign_org_role = Viewer
+verify_email_enabled = false
+default_theme = dark
+
+# Security settings
+[security]
+admin_user = admin
+admin_password = 
+secret_key = 
+disable_gravatar = false
+Save the configuration file and exit the editor.
+
+Subtask 2.4: Restart Grafana Service
+Apply the configuration changes by restarting Grafana.
+
+# Restart Grafana service
+sudo systemctl restart grafana-server
+
+# Check service status
+sudo systemctl status grafana-server
+
+# Monitor logs for any errors
+sudo journalctl -u grafana-server -f --no-pager -n 30
+Task 3: Test SSO Authentication
+Subtask 3.1: Test GitHub OAuth Login
+Open your web browser and navigate to http://localhost:3000
+You should now see a Sign in with GitHub button on the login page
+Click the GitHub login button
+You will be redirected to GitHub for authentication
+Authorize the Grafana application when prompted
+You should be redirected back to Grafana and automatically logged in
+Subtask 3.2: Verify User Information
+Once logged in via GitHub OAuth:
+
+Click on your profile icon in the bottom left corner
+Select Profile to view your user information
+Verify that your GitHub username and email are displayed correctly
+Check the Organizations tab to see your GitHub organizations (if any)
+Subtask 3.3: Test Role Assignment
+Create a test dashboard to verify permissions:
+
+Navigate to Dashboards > New Dashboard
+Add a simple panel with a test query
+Save the dashboard with the name "SSO Test Dashboard"
+Verify that you can create and modify dashboards based on your assigned role
+Subtask 3.4: Test Logout and Re-login
+Test the complete authentication flow:
+
+# Check current Grafana sessions
+sudo grep -i "login\|logout\|oauth" /var/log/grafana/grafana.log | tail -10
+Log out of Grafana using the logout option in the user menu
+Attempt to access a protected page directly
+Verify that you are redirected to the login page
+Log in again using GitHub OAuth
+Confirm that the session is properly established
+Task 4: Advanced SSO Configuration
+Subtask 4.1: Configure Team Mapping
+Enhance the OAuth configuration to map GitHub teams to Grafana roles:
+
+# Edit the configuration file again
+sudo nano /etc/grafana/grafana.ini
+Update the GitHub OAuth section:
+
+[auth.github]
+enabled = true
+allow_sign_up = true
+client_id = YOUR_GITHUB_CLIENT_ID
+client_secret = YOUR_GITHUB_CLIENT_SECRET
+scopes = user:email,read:org
+auth_url = https://github.com/login/oauth/authorize
+token_url = https://github.com/login/oauth/access_token
+api_url = https://api.github.com/user
+# Map GitHub teams to Grafana roles
+team_ids = 
+allowed_organizations = YOUR_GITHUB_ORGANIZATION
+allow_assign_grafana_admin = true
+role_attribute_path = contains(groups[*], '@YOUR_ORG/admin') && 'Admin' || contains(groups[*], '@YOUR_ORG/editor') && 'Editor' || 'Viewer'
+Subtask 4.2: Configure Session Management
+Add session security settings:
+
+# Session configuration
+[session]
+provider = file
+provider_config = sessions
+cookie_name = grafana_sess
+cookie_secure = false
+session_life_time = 86400
+gc_interval_time = 86400
+Subtask 4.3: Enable Audit Logging
+Configure audit logging to track authentication events:
+
+# Logging configuration
+[log]
+mode = console file
+level = info
+filters = 
+
+[log.console]
+level = info
+format = console
+
+[log.file]
+level = info
+format = text
+log_rotate = true
+max_lines = 1000000
+max_size_shift = 28
+daily_rotate = true
+max_days = 7
+Restart Grafana to apply the changes:
+
+sudo systemctl restart grafana-server
+sudo journalctl -u grafana-server -f --no-pager -n 20
+Task 5: Security Verification and Monitoring
+Subtask 5.1: Verify Security Headers
+Check that proper security headers are configured:
+
+# Test security headers
+curl -I http://localhost:3000
+
+# Check for specific security headers
+curl -s -D- http://localhost:3000 | grep -i "x-frame-options\|x-content-type-options\|x-xss-protection"
+Subtask 5.2: Monitor Authentication Logs
+Set up monitoring for authentication events:
+
+# Create a script to monitor OAuth events
+cat > ~/monitor_sso.sh << 'EOF'
+#!/bin/bash
+echo "Monitoring Grafana SSO authentication events..."
+echo "Press Ctrl+C to stop monitoring"
+echo "----------------------------------------"
+
+tail -f /var/log/grafana/grafana.log | grep -i --line-buffered "oauth\|github\|login\|logout\|auth"
+EOF
+
+chmod +x ~/monitor_sso.sh
+
+# Run the monitoring script
+~/monitor_sso.sh
+Subtask 5.3: Test Security Scenarios
+Perform security testing:
+
+Test with invalid OAuth credentials:
+
+Temporarily modify the client secret in the configuration
+Restart Grafana and attempt to log in
+Verify that authentication fails gracefully
+Test session timeout:
+
+Set a short session timeout in the configuration
+Log in and wait for the session to expire
+Verify that you are redirected to login
+Test unauthorized access:
+
+Log out of Grafana
+Try to access http://localhost:3000/api/dashboards/home
+Verify that you receive an authentication error
+Troubleshooting Common Issues
+Issue 1: OAuth Callback URL Mismatch
+Symptoms: Error message about callback URL mismatch during GitHub authentication.
+
+Solution:
+
+# Verify the callback URL in your GitHub OAuth app settings
+# It should be: http://localhost:3000/login/github
+
+# Check Grafana configuration
+grep -n "root_url" /etc/grafana/grafana.ini
+Issue 2: Grafana Service Not Starting
+Symptoms: Grafana service fails to start after configuration changes.
+
+Solution:
+
+# Check service status and logs
+sudo systemctl status grafana-server
+sudo journalctl -u grafana-server --no-pager -n 50
+
+# Validate configuration syntax
+sudo grafana-server -config /etc/grafana/grafana.ini -test-config
+Issue 3: GitHub OAuth Not Appearing
+Symptoms: GitHub login button not visible on the login page.
+
+Solution:
+
+# Verify OAuth configuration
+grep -A 10 "\[auth.github\]" /etc/grafana/grafana.ini
+
+# Ensure enabled = true is set
+# Restart Grafana service
+sudo systemctl restart grafana-server
+Issue 4: Permission Denied Errors
+Symptoms: Users cannot access certain features after OAuth login.
+
+Solution:
+
+# Check user roles in Grafana logs
+sudo grep -i "role\|permission" /var/log/grafana/grafana.log
+
+# Verify role assignment in configuration
+grep -A 5 "auto_assign_org_role" /etc/grafana/grafana.ini
+Lab Verification
+To verify that your SSO configuration is working correctly, perform these final checks:
+
+# 1. Verify Grafana is running with OAuth enabled
+curl -s http://localhost:3000/login | grep -i github
+
+# 2. Check configuration syntax
+sudo grafana-server -config /etc/grafana/grafana.ini -test-config
+
+# 3. Verify OAuth endpoints are accessible
+curl -s "https://github.com/login/oauth/authorize?client_id=YOUR_CLIENT_ID&response_type=code"
+
+# 4. Check authentication logs
+sudo tail -20 /var/log/grafana/grafana.log | grep -i oauth
+Conclusion
+In this lab, you have successfully:
+
+Installed and configured Grafana on a Linux system with proper security settings
+Set up OAuth 2.0 authentication using GitHub as an external identity provider
+Configured SSO integration that allows users to authenticate using their GitHub credentials
+Tested the complete authentication flow including login, logout, and session management
+Implemented security best practices including role mapping and audit logging
+Learned troubleshooting techniques for common SSO configuration issues
+Why This Matters: Single Sign-On (SSO) is crucial for enterprise environments because it:
+
+Improves security by centralizing authentication and reducing password fatigue
+Enhances user experience by eliminating the need for multiple credentials
+Simplifies administration by providing centralized user management
+Enables better compliance through centralized audit trails and access controls
+Reduces support overhead by minimizing password-related help desk tickets
+The skills you have learned in this lab are directly applicable to production environments where Grafana is used for monitoring and observability. SSO integration is essential for organizations that need to provide secure, scalable access to their monitoring infrastructure while maintaining compliance with security policies and regulations.
+
+You can extend this knowledge by exploring other OAuth providers (such as Google, Microsoft Azure AD, or Okta) and implementing more advanced features like automatic team synchronization and role-based access control based on external group memberships.
