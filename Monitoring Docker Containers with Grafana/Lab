@@ -1,0 +1,68 @@
+Monitoring Docker Containers with Grafana
+Objectives
+Design and deploy a containerized observability stack using Prometheus and Grafana on a bare Ubuntu system
+Configure metric collection from Docker itself and from running containers using cAdvisor and Node Exporter
+Build Grafana dashboards that surface actionable container and host performance data
+Prerequisites
+Comfort navigating and editing files on a Linux command line
+Familiarity with Docker concepts: images, containers, volumes, and networks
+Basic understanding of YAML syntax and how key-value configuration files are structured
+Lab Environment
+You will work on a dedicated AWS EC2 Ubuntu instance provided by Al Nafi. The instance has a base Ubuntu installation; you will install all required tools in Task 1.
+
+Task 1: Install and Verify the Full Tool Stack
+Problem statement: Your EC2 instance is a blank Ubuntu system. Design an installation sequence that produces a working Docker Engine with its metrics endpoint enabled, plus Docker Compose as a plugin. Every tool must be verified before you proceed.
+
+Requirement 1: Install Docker Engine from Docker's official apt repository, add your user to the docker group so you can run containers without sudo, and configure the Docker daemon to expose a Prometheus-compatible metrics endpoint on port 9323 by writing a valid /etc/docker/daemon.json. The daemon configuration key that enables this is metrics-addr; the key that unlocks the metrics endpoint is experimental.
+
+Confirmation: curl http://localhost:9323/metrics returns lines beginning with engine_ without any connection-refused error, and docker run --rm hello-world prints the "Hello from Docker!" message.
+
+Troubleshoot this step:
+
+You may see E: Package 'docker-ce' has no installation candidate if the Docker apt repository was not added correctly.
+Verify the repository file with cat /etc/apt/sources.list.d/docker.list â it must be a single unbroken line containing your Ubuntu codename (e.g. jammy); delete and recreate the file using a heredoc if it contains backslashes or is split across lines.
+Official guide: https://docs.docker.com/engine/install/ubuntu/
+Troubleshoot this step:
+
+You may see curl: (7) Failed to connect to localhost port 9323 after restarting Docker even though the daemon is running.
+Confirm the file is valid JSON with python3 -m json.tool /etc/docker/daemon.json â any syntax error silently prevents the metrics server from starting; fix the JSON and run sudo systemctl restart docker.
+Official guide: https://docs.docker.com/config/daemon/prometheus/
+Requirement 2: Verify that Docker Compose (v2 plugin form, invoked as docker compose) is available and that your user session has picked up the docker group membership without requiring a full logout.
+
+Confirmation: docker compose version prints a version string of the form Docker Compose version v2.x.x, and docker ps runs without a permission-denied error in your current shell session.
+
+Task 2: Deploy the Observability Stack and Collect Metrics
+Problem statement: Design and implement a multi-service monitoring stack, defined entirely in a single Docker Compose file, that collects metrics from three sources and stores them in Prometheus. You must decide the directory layout, volume strategy, network configuration, and Prometheus scrape configuration yourself. No templates are provided.
+
+Requirement 1: Your Compose file must bring up four services â Prometheus (port 9090), Grafana (port 3000), cAdvisor (port 8080), and Node Exporter (port 9100) â and Prometheus must be configured to scrape all four metric sources: itself, the Docker daemon metrics endpoint on the host at port 9323, cAdvisor, and Node Exporter. The Prometheus scrape configuration must use a scrape interval of 15 seconds globally and 5 seconds for the Docker daemon and cAdvisor jobs. Because Prometheus runs inside a container, reaching the host's port 9323 requires the host.docker.internal hostname, which on Linux must be injected via extra_hosts: ["host.docker.internal:host-gateway"] on the Prometheus service.
+
+Acceptance criteria:
+
+Visiting http://localhost:9090/targets in a browser (or querying curl -s http://localhost:9090/api/v1/targets) shows all four scrape targets with "health":"up" within 60 seconds of stack startup.
+The PromQL query count(container_last_seen{name!=""}) entered in the Prometheus expression browser returns a numeric result greater than zero, confirming cAdvisor is delivering per-container metrics.
+Requirement 2: Deploy a secondary Compose file (separate from your monitoring stack) that runs at least three workload containers â choose any publicly available images â to generate realistic CPU, memory, and network metrics. Grafana must be provisioned automatically on startup (no manual UI clicks) with Prometheus as its default data source, using Grafana's file-based provisioning system under /etc/grafana/provisioning/datasources/.
+
+Acceptance criteria:
+
+curl -s -u admin:<your-password> http://localhost:3000/api/datasources returns a JSON array containing an object where "name" is "Prometheus" and "isDefault" is true.
+docker compose ps against your workload Compose file shows all three workload containers in running state, and curl -s "http://localhost:9090/api/v1/query?query=count(container_last_seen{name!=''})" returns a value of at least 7 (4 monitoring stack containers plus 3 workload containers).
+Task 3: Build Dashboards and Implement Alerting
+Problem statement: Design two Grafana dashboards and one Prometheus alerting rule file, all provisioned automatically from files on disk so that restarting Grafana or Prometheus loads them without any manual UI interaction.
+
+Requirement 1: Create a "Container Performance" dashboard provisioned via Grafana's file-based dashboard provider that contains at minimum four panels: a stat panel showing the count of running containers, a time-series panel showing per-container CPU usage as a percentage (using rate(container_cpu_usage_seconds_total[5m]) * 100), a time-series panel showing per-container memory usage in mebibytes, and a time-series panel showing per-container network receive and transmit rates in bytes per second. Create a second dashboard titled "Host Resources" with panels for host CPU usage percentage, host memory usage percentage, and root filesystem usage percentage, all derived from Node Exporter metrics.
+
+Acceptance criteria:
+
+After a docker compose restart grafana, the Grafana API endpoint curl -s -u admin:<your-password> http://localhost:3000/api/search?type=dash-db returns a JSON array containing exactly two dashboard objects with titles matching "Container Performance" and "Host Resources" â confirming both loaded from disk without manual import.
+Every panel in both dashboards displays a non-null, non-zero data series when queried over the last 15 minutes, confirming the PromQL expressions are syntactically valid and returning real data.
+Requirement 2: Write a Prometheus alerting rules file that defines two alerts: HighContainerCPU, which fires when any named container's 5-minute CPU rate exceeds 50% for more than 1 minute, and HighContainerMemory, which fires when any named container's memory usage exceeds 200 MiB for more than 1 minute. Mount this rules file into the Prometheus container and reference it in prometheus.yml under rule_files. Then generate enough CPU load on one of your workload containers to trigger the HighContainerCPU alert â use docker exec to run a CPU-intensive process inside an existing container rather than launching a new one.
+
+Acceptance criteria:
+
+curl -s http://localhost:9090/api/v1/rules returns a JSON response containing a group with two rules named HighContainerCPU and HighContainerMemory, each with "type":"alerting" â confirming Prometheus loaded the rules file without errors.
+Within 3 minutes of starting the CPU load, curl -s http://localhost:9090/api/v1/alerts returns a JSON response where the data.alerts array contains at least one entry with "alertname":"HighContainerCPU" and "state":"firing".
+Expected Outcomes
+A fully automated observability stack that starts from a single docker compose up -d command and requires zero manual UI configuration to display populated dashboards and active alerting rules.
+Demonstrated ability to correlate host-level metrics from Node Exporter with container-level metrics from cAdvisor inside a unified Grafana environment.
+Conclusion
+You have designed and deployed a production-pattern monitoring stack from a blank Ubuntu system, making every architectural decision â directory layout, scrape intervals, dashboard structure, and alert thresholds â without guided steps. The provisioning-as-code approach you implemented means the entire observability configuration is version-controllable and reproducible. Extend this foundation by adding Alertmanager to route firing alerts to a notification channel such as Slack or email.
