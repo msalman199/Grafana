@@ -1,0 +1,496 @@
+Implementing RBAC in Grafana
+Lab Objectives
+By the end of this lab, you will be able to:
+
+Install and configure Grafana on a Linux system
+Understand the fundamentals of Role-Based Access Control (RBAC) in Grafana
+Create custom roles with specific permissions in Grafana
+Assign roles to users and manage user access
+Test and validate access controls for different user roles
+Implement security best practices for Grafana deployments
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Linux command line operations
+Familiarity with web browsers and basic networking concepts
+Understanding of user management concepts
+Basic knowledge of monitoring and visualization tools
+Familiarity with JSON configuration files
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated Linux machine. The provided Linux machine is bare metal with no pre-installed tools, so you will need to install Grafana and other required tools during the lab.
+
+Task 1: Installing and Setting Up Grafana
+Subtask 1.1: Update System and Install Dependencies
+First, update your system and install necessary dependencies:
+
+# Update package repository
+sudo apt update && sudo apt upgrade -y
+
+# Install required packages
+sudo apt install -y software-properties-common apt-transport-https wget curl gnupg2
+Subtask 1.2: Install Grafana
+Install Grafana using the official repository:
+
+# Add Grafana GPG key
+wget -q -O - https://packages.grafana.com/gpg.key | sudo apt-key add -
+
+# Add Grafana repository
+echo "deb https://packages.grafana.com/oss/deb stable main" | sudo tee /etc/apt/sources.list.d/grafana.list
+
+# Update package list
+sudo apt update
+
+# Install Grafana
+sudo apt install -y grafana
+Subtask 1.3: Start and Enable Grafana Service
+Configure Grafana to start automatically and start the service:
+
+# Enable Grafana service to start on boot
+sudo systemctl enable grafana-server
+
+# Start Grafana service
+sudo systemctl start grafana-server
+
+# Check service status
+sudo systemctl status grafana-server
+Subtask 1.4: Verify Grafana Installation
+Check if Grafana is running properly:
+
+# Check if Grafana is listening on port 3000
+sudo netstat -tlnp | grep :3000
+
+# Check Grafana logs
+sudo journalctl -u grafana-server -f
+Access Grafana web interface by opening a web browser and navigating to http://localhost:3000. The default credentials are:
+
+Username: admin
+Password: admin
+You will be prompted to change the password on first login.
+
+Task 2: Configuring Basic User Management
+Subtask 2.1: Change Default Admin Password
+Log in to Grafana using the default credentials
+When prompted, change the admin password to a secure password
+Make note of the new password for future use
+Subtask 2.2: Enable User Registration (Optional)
+To allow new user registration, modify the Grafana configuration:
+
+# Edit Grafana configuration file
+sudo nano /etc/grafana/grafana.ini
+Find the [users] section and modify:
+
+[users]
+# disable user signup / registration
+allow_sign_up = true
+
+# Default role new users will be automatically assigned
+auto_assign_org_role = Viewer
+Restart Grafana to apply changes:
+
+sudo systemctl restart grafana-server
+Subtask 2.3: Create Test Users
+Create several test users through the Grafana web interface:
+
+Navigate to Configuration > Users
+Click New User
+Create the following users:
+User 1 - Developer:
+
+Name: John Developer
+Email: john.developer@company.com
+Username: jdeveloper
+Password: DevPass123!
+User 2 - Manager:
+
+Name: Sarah Manager
+Email: sarah.manager@company.com
+Username: smanager
+Password: MgrPass123!
+User 3 - Viewer:
+
+Name: Bob Viewer
+Email: bob.viewer@company.com
+Username: bviewer
+Password: ViewPass123!
+Task 3: Understanding Grafana RBAC Structure
+Subtask 3.1: Explore Default Roles
+Grafana comes with three default organization roles:
+
+Admin: Full access to everything
+Editor: Can view, edit, and create dashboards
+Viewer: Can only view dashboards
+Navigate to Configuration > Users to see current user roles.
+
+Subtask 3.2: Understanding Permissions
+Grafana permissions are organized around:
+
+Organizations: Top-level containers
+Teams: Groups of users within organizations
+Folders: Containers for dashboards
+Dashboards: Individual visualization panels
+Data Sources: Backend data connections
+Task 4: Creating Custom Roles and Permissions
+Subtask 4.1: Enable RBAC Feature
+First, enable the RBAC feature in Grafana configuration:
+
+# Edit Grafana configuration
+sudo nano /etc/grafana/grafana.ini
+Add or modify the following in the [feature_toggles] section:
+
+[feature_toggles]
+# Enable RBAC
+accesscontrol = true
+Restart Grafana:
+
+sudo systemctl restart grafana-server
+Subtask 4.2: Create Teams for Role Management
+Navigate to Configuration > Teams
+Click New Team
+Create the following teams:
+
+Development Team:
+
+Name: Development Team
+Description: Developers who need dashboard editing access
+Add user: jdeveloper
+Management Team:
+
+Name: Management Team
+Description: Managers who need read access to all dashboards
+Add user: smanager
+Operations Team:
+
+Name: Operations Team
+Description: Operations staff with limited access
+Add user: bviewer
+Subtask 4.3: Create Folders for Access Control
+Create folders to organize dashboards:
+
+Navigate to Dashboards
+Click New > Folder
+Create these folders:
+
+Development Metrics
+Business Metrics
+System Monitoring
+Subtask 4.4: Configure Folder Permissions
+Set permissions for each folder:
+
+Development Metrics Folder:
+
+Go to the folder settings
+Click Permissions tab
+Remove default permissions
+Add permissions:
+Development Team: Edit
+Management Team: View
+Operations Team: No access
+Business Metrics Folder:
+
+Set permissions:
+Management Team: Edit
+Development Team: View
+Operations Team: View
+System Monitoring Folder:
+
+Set permissions:
+Operations Team: Edit
+Development Team: View
+Management Team: View
+Task 5: Creating Sample Dashboards for Testing
+Subtask 5.1: Install Sample Data Source
+Install and configure a simple data source for testing:
+
+# Install and start InfluxDB as a sample data source
+sudo apt install -y influxdb influxdb-client
+
+# Start InfluxDB
+sudo systemctl start influxdb
+sudo systemctl enable influxdb
+
+# Create sample database
+influx -execute "CREATE DATABASE sampledata"
+Subtask 5.2: Configure Data Source in Grafana
+Navigate to Configuration > Data Sources
+Click Add data source
+Select InfluxDB
+Configure:
+Name: SampleInfluxDB
+URL: http://localhost:8086
+Database: sampledata
+Click Save & Test
+Subtask 5.3: Create Sample Dashboards
+Create test dashboards in each folder:
+
+Development Dashboard:
+
+Navigate to Development Metrics folder
+Click New Dashboard
+Add a simple panel with a test query
+Save as "Application Performance"
+Business Dashboard:
+
+Navigate to Business Metrics folder
+Create a new dashboard
+Add panels for business metrics
+Save as "Revenue Tracking"
+System Dashboard:
+
+Navigate to System Monitoring folder
+Create a new dashboard
+Add system monitoring panels
+Save as "Server Health"
+Task 6: Testing Access Controls
+Subtask 6.1: Test Developer Access
+Log out of admin account
+Log in as jdeveloper
+Verify access:
+Can edit dashboards in Development Metrics folder
+Can view dashboards in Business Metrics folder
+Cannot access System Monitoring folder
+Cannot access admin configuration
+Subtask 6.2: Test Manager Access
+Log out and log in as smanager
+Verify access:
+Can edit dashboards in Business Metrics folder
+Can view dashboards in Development Metrics and System Monitoring folders
+Cannot access admin configuration
+Cannot create data sources
+Subtask 6.3: Test Viewer Access
+Log out and log in as bviewer
+Verify access:
+Can edit dashboards in System Monitoring folder only
+Can view dashboards in Business Metrics folder
+Cannot access Development Metrics folder
+Cannot modify any configuration
+Subtask 6.4: Document Access Test Results
+Create a test results document:
+
+# Create test results file
+nano rbac_test_results.txt
+Document your findings:
+
+RBAC Test Results - Grafana Implementation
+
+User: jdeveloper (Development Team)
+- Development Metrics: EDIT access - PASS
+- Business Metrics: VIEW access - PASS
+- System Monitoring: NO access - PASS
+- Admin functions: BLOCKED - PASS
+
+User: smanager (Management Team)
+- Business Metrics: EDIT access - PASS
+- Development Metrics: VIEW access - PASS
+- System Monitoring: VIEW access - PASS
+- Admin functions: BLOCKED - PASS
+
+User: bviewer (Operations Team)
+- System Monitoring: EDIT access - PASS
+- Business Metrics: VIEW access - PASS
+- Development Metrics: NO access - PASS
+- Admin functions: BLOCKED - PASS
+
+Overall RBAC Implementation: SUCCESS
+Task 7: Advanced RBAC Configuration
+Subtask 7.1: Create Custom Permissions
+For more granular control, create custom permissions:
+
+Navigate to Configuration > Access Control
+Click Roles tab
+Click New Role
+Create a Dashboard Creator role:
+
+Name: Dashboard Creator
+Description: Can create and edit dashboards but not manage users
+Permissions:
+dashboards:create
+dashboards:write
+folders:create
+folders:write
+Subtask 7.2: Assign Custom Roles
+Go to Configuration > Users
+Select a user
+In the Roles section, assign the custom role
+Test the new permissions
+Subtask 7.3: Configure API Access Control
+Create API keys with limited permissions:
+
+Navigate to Configuration > API Keys
+Click New API Key
+Create keys with different permission levels:
+Read-only API Key: Viewer role
+Dashboard API Key: Editor role
+Admin API Key: Admin role
+Test API access:
+
+# Test read-only API access
+curl -H "Authorization: Bearer YOUR_READONLY_API_KEY" \
+     http://localhost:3000/api/dashboards/home
+
+# Test dashboard API access
+curl -H "Authorization: Bearer YOUR_DASHBOARD_API_KEY" \
+     -H "Content-Type: application/json" \
+     http://localhost:3000/api/dashboards/db
+Task 8: Monitoring and Auditing Access
+Subtask 8.1: Enable Audit Logging
+Configure audit logging in Grafana:
+
+# Edit Grafana configuration
+sudo nano /etc/grafana/grafana.ini
+Add audit logging configuration:
+
+[log]
+# Enable audit logging
+mode = console file
+level = info
+
+[log.file]
+# Log file location
+log_rotate = true
+max_lines = 1000000
+max_size_shift = 28
+daily_rotate = true
+max_days = 7
+
+[auditing]
+# Enable auditing
+enabled = true
+# Log successful logins
+log_dashboard_content = true
+Restart Grafana:
+
+sudo systemctl restart grafana-server
+Subtask 8.2: Monitor Access Logs
+Check Grafana logs for access patterns:
+
+# View recent Grafana logs
+sudo journalctl -u grafana-server -n 100
+
+# Monitor real-time logs
+sudo tail -f /var/log/grafana/grafana.log
+Subtask 8.3: Create Access Monitoring Dashboard
+Create a dashboard to monitor user access:
+
+Create a new dashboard called "Access Monitoring"
+Add panels to track:
+Login attempts
+Dashboard access patterns
+Failed authentication attempts
+User activity by role
+Troubleshooting Common Issues
+Issue 1: Users Cannot Access Dashboards
+Symptoms: Users get "Access Denied" errors
+
+Solutions:
+
+# Check user permissions
+# Verify team membership
+# Check folder permissions
+# Restart Grafana service
+sudo systemctl restart grafana-server
+Issue 2: RBAC Features Not Available
+Symptoms: Role-based features missing from UI
+
+Solutions:
+
+# Verify feature toggle is enabled
+grep "accesscontrol" /etc/grafana/grafana.ini
+
+# Check Grafana version
+grafana-server -v
+
+# Restart service
+sudo systemctl restart grafana-server
+Issue 3: Permission Changes Not Taking Effect
+Symptoms: Permission changes don't apply immediately
+
+Solutions:
+
+# Clear browser cache
+# Log out and log back in
+# Restart Grafana service
+sudo systemctl restart grafana-server
+
+# Check configuration syntax
+sudo grafana-server -config /etc/grafana/grafana.ini -test
+Security Best Practices
+Practice 1: Regular Permission Audits
+Create a script to audit permissions:
+
+#!/bin/bash
+# Create permission audit script
+cat > audit_permissions.sh << 'EOF'
+#!/bin/bash
+echo "Grafana RBAC Audit Report - $(date)"
+echo "=================================="
+echo ""
+echo "Active Users:"
+echo "-------------"
+# This would typically query Grafana API
+echo "Review users in Grafana UI: Configuration > Users"
+echo ""
+echo "Team Memberships:"
+echo "----------------"
+echo "Review teams in Grafana UI: Configuration > Teams"
+echo ""
+echo "Folder Permissions:"
+echo "------------------"
+echo "Review folder permissions in each dashboard folder"
+EOF
+
+chmod +x audit_permissions.sh
+Practice 2: Implement Strong Password Policies
+Configure password requirements:
+
+# Edit Grafana configuration
+sudo nano /etc/grafana/grafana.ini
+Add password policy:
+
+[security]
+# Minimum password length
+min_password_length = 8
+# Require password complexity
+password_complexity = true
+Practice 3: Regular Backup of Configuration
+Create backup script:
+
+#!/bin/bash
+# Backup Grafana configuration and database
+cat > backup_grafana.sh << 'EOF'
+#!/bin/bash
+BACKUP_DIR="/backup/grafana/$(date +%Y%m%d)"
+mkdir -p $BACKUP_DIR
+
+# Backup configuration
+cp /etc/grafana/grafana.ini $BACKUP_DIR/
+
+# Backup database
+cp /var/lib/grafana/grafana.db $BACKUP_DIR/
+
+echo "Backup completed: $BACKUP_DIR"
+EOF
+
+chmod +x backup_grafana.sh
+Conclusion
+In this lab, you have successfully implemented Role-Based Access Control (RBAC) in Grafana. You have learned to:
+
+Install and configure Grafana on a Linux system
+Create and manage user accounts with different permission levels
+Implement team-based access control using folders and permissions
+Test access controls to ensure proper security implementation
+Configure advanced RBAC features including custom roles and API access control
+Monitor and audit user access patterns
+Apply security best practices for production deployments
+Key Takeaways:
+
+Layered Security: RBAC provides multiple layers of access control through organizations, teams, folders, and individual resources
+Principle of Least Privilege: Users should only have the minimum permissions necessary to perform their job functions
+Regular Auditing: Periodic review of permissions and access patterns is essential for maintaining security
+Documentation: Proper documentation of roles and permissions helps maintain security over time
+Real-World Applications:
+
+Enterprise Monitoring: Large organizations use RBAC to ensure different departments only access relevant metrics
+Multi-Tenant Environments: Service providers use RBAC to isolate customer data and dashboards
+Compliance Requirements: Many industries require strict access controls for regulatory compliance
+Development Workflows: RBAC enables safe collaboration between development, operations, and management teams
+This RBAC implementation provides a solid foundation for securing Grafana in production environments while maintaining usability for different user roles and responsibilities.
