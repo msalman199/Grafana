@@ -1,0 +1,81 @@
+ Grafana with Tempo for Distributed Tracing
+Objectives
+Deploy a production-grade distributed tracing pipeline using Grafana Tempo, OpenTelemetry Collector, and Prometheus on a bare Ubuntu instance
+Instrument a multi-endpoint HTTP application to emit structured trace data with parent-child span relationships and error classification
+Build a Grafana dashboard that correlates trace latency percentiles with Prometheus metrics and surfaces service-level performance anomalies
+Prerequisites
+Comfort navigating and editing files on a Linux command line, including writing YAML and running shell scripts
+Conceptual understanding of distributed tracing: what a trace, span, and trace context are, and why they differ from logs and metrics
+Lab Environment
+You will work on a dedicated AWS EC2 Ubuntu instance provided by Al Nafi. The instance has a base Ubuntu installation; you will install all required tools in Task 1.
+
+Task 1: Install the Observability Toolchain and Verify It
+Requirement 1.1
+Design and implement a fully automated installation procedure that installs Docker Engine, Docker Compose plugin, and the curl, wget, and bc utilities on the bare Ubuntu instance, then starts a five-service Docker Compose stack consisting of Grafana Tempo (trace storage and query backend), Grafana (visualization), Prometheus (metrics storage with remote-write receiver enabled), Loki (log aggregation), and an OpenTelemetry Collector (telemetry pipeline that receives OTLP over gRPC and HTTP and fans out to Tempo, Prometheus, and Loki). All five services must communicate over a single user-defined Docker bridge network. Tempo must be configured to use local disk storage and must have its metrics generator enabled with the service-graphs and span-metrics processors writing to Prometheus via remote write. The OpenTelemetry Collector configuration must define separate pipelines for traces, metrics, and logs.
+
+Acceptance Criteria
+
+Running docker compose ps shows all five services in running state with no restarts, and curl -sf http://localhost:3200/ready returns ready, curl -sf http://localhost:3000/api/health returns a JSON body containing "database": "ok", and curl -sf http://localhost:9090/-/healthy returns Prometheus Server is Healthy.
+The Grafana UI at port 3000 lists Tempo, Prometheus, and Loki as provisioned data sources, and clicking Save and test on each returns a green success banner with no manual editing of the UI required.
+Troubleshoot this step (Docker installation):
+
+You may see E: Package 'docker-ce' has no installation candidate if the Docker apt repository was not added correctly.
+Verify the repository file with cat /etc/apt/sources.list.d/docker.list â it must be a single unbroken line with no literal backslashes; delete and recreate the file using a heredoc if it is malformed.
+Official guide: https://docs.docker.com/engine/install/ubuntu/
+Troubleshoot this step (Docker Compose stack):
+
+You may see Error response from daemon: Ports are not available: exposing port TCP 0.0.0.0:4317 if both Tempo and the OTel Collector attempt to bind the same host port.
+Resolve the port conflict by exposing Tempo's OTLP ports only on the internal Docker network (remove the host-port mapping for 4317 and 4318 on the Tempo service) so only the OTel Collector binds those host ports.
+Official Tempo configuration reference: https://grafana.com/docs/tempo/latest/configuration/
+Requirement 1.2
+Design and implement a health-verification script (not a Docker health check â a standalone shell script you run manually) that queries every service endpoint listed in Requirement 1.1, prints a clearly labeled PASS or FAIL line for each, and exits with code 0 only when all checks pass. The script must use curl with failure-on-HTTP-error flags so a non-2xx response is treated as a failure, and it must print the HTTP status code alongside each result.
+
+Acceptance Criteria
+
+Running the script on a fully started stack prints five PASS lines and exits 0; stopping any single service and re-running the script prints exactly one FAIL line for that service and exits non-zero.
+The script completes within 10 seconds when all services are healthy, measured with time ./your-script.sh.
+Task 2: Build and Instrument a Multi-Service Trace-Emitting Application
+Requirement 2.1
+Design and implement a containerized HTTP application (language of your choice) that exposes at least five distinct routes: a root route, a user-lookup route that accepts a numeric ID path parameter, an orders route that simulates calling two downstream services sequentially, a deliberately slow route that introduces variable latency between 1 and 4 seconds, and an error route that always returns HTTP 500. Every route must create a root span named after the operation, and the orders route must create child spans for each simulated downstream call so that the resulting trace has a minimum depth of three levels (root span, order-processing span, payment and inventory child spans). Every span must carry at minimum three semantic attributes drawn from the OpenTelemetry semantic conventions (for example http.method, db.operation, service.name). Error spans must have their status set to ERROR with a descriptive message. The application must export traces to the OTel Collector via OTLP/gRPC and must expose a /metrics endpoint in Prometheus exposition format reporting total request count and request duration as a histogram. Add this application as a sixth service in your Docker Compose stack.
+
+Acceptance Criteria
+
+After sending at least 50 requests distributed across all five routes using a load script, the Grafana Tempo Explore view shows traces for each route, at least one trace for the orders route contains a minimum of five spans with correct parent-child nesting visible in the waterfall view, and at least one trace is marked with ERROR status.
+curl -sf http://localhost:8080/metrics returns a response containing the metric names http_requests_total and http_request_duration_seconds_bucket, and Prometheus at http://localhost:9090/graph can execute sum(rate(http_requests_total[1m])) and return a non-zero result.
+Troubleshoot this step (OTLP export):
+
+You may see Failed to export spans: rpc error: code = Unavailable in your application logs if the OTel Collector is not reachable by the service name you configured.
+Confirm the application container is on the same Docker network as the OTel Collector with docker inspect <app-container> | grep -A 10 Networks and verify the Collector service name matches the hostname used in the OTLP endpoint URL.
+OpenTelemetry OTLP exporter documentation: https://opentelemetry.io/docs/specs/otlp/
+Requirement 2.2
+Design and implement a continuous load-generation script that runs in the background and sends randomized requests to all five application routes indefinitely, with a configurable requests-per-second rate defaulting to 2 RPS, a 5 percent probability of targeting the error route on any given request, and a 10 percent probability of targeting the slow route. The script must log each request's HTTP status code and response time in milliseconds to a file named load.log and must be stoppable with a single kill command using a PID file it writes on startup.
+
+Acceptance Criteria
+
+After the script has run for 5 minutes, wc -l load.log shows at least 550 lines, the log contains lines with status code 500 (from the error route), and lines with response times exceeding 1000 ms (from the slow route).
+Running kill $(cat load.pid) stops the script cleanly within 3 seconds with no zombie processes remaining, confirmed by ps aux | grep load showing no matching process.
+Task 3: Build a Grafana Tracing Dashboard and Validate Observability
+Requirement 3.1
+Design and implement a Grafana dashboard (exported as a JSON file and importable via the Grafana API without manual UI steps) that contains exactly four panels arranged in a two-by-two grid: a Tempo trace search panel filtered to the sample-app service showing the most recent 50 traces, a Prometheus time-series panel showing the 50th, 95th, and 99th percentile request duration over the last 15 minutes using histogram_quantile, a Prometheus stat panel showing the current error rate as a percentage (HTTP 4xx and 5xx responses divided by total responses), and a Prometheus time-series panel showing per-route request rate in requests per second. The dashboard must auto-refresh every 10 seconds and must have its default time range set to the last 15 minutes. The dashboard must be imported using only a curl command against the Grafana HTTP API (no browser interaction).
+
+Acceptance Criteria
+
+Running your import command returns HTTP 200 with a JSON body containing "status":"success", and navigating to the Grafana Dashboards list in the browser shows the dashboard by name with all four panels rendering data (no "No data" placeholders) within 30 seconds of import, provided the load script from Task 2 is still running.
+Clicking on any trace in the Tempo trace search panel opens the full waterfall view showing individual spans with their attributes, and the 95th percentile latency panel shows a value above 1 second (reflecting the slow route's contribution), confirmed by visual inspection.
+Troubleshoot this step (dashboard import via API):
+
+You may see {"message":"invalid API key"} or HTTP 401 if the credentials in your curl command do not match Grafana's configured admin credentials.
+Confirm the correct credentials with docker compose exec grafana env | grep GF_SECURITY and update your curl command's -u flag to match.
+Grafana HTTP API reference: https://grafana.com/docs/grafana/latest/developers/http_api/dashboard/
+Requirement 3.2
+Design and implement a trace analysis procedure â documented as a runnable shell script that uses the Tempo HTTP API directly (not the Grafana UI) â that queries Tempo for all traces from the sample-app service in the last 10 minutes, filters the results to traces whose root span duration exceeds 1 second, prints the trace ID and duration of each such trace to stdout in tab-separated format, and then fetches the full span tree for the single longest trace and prints the name and duration of every span in that trace. The script must use only curl, jq, and standard POSIX utilities.
+
+Acceptance Criteria
+
+Running the script while the load generator is active produces at least one trace ID in the filtered output (confirming slow traces are being captured), and the span tree output for the longest trace shows a minimum of three span names with non-zero durations, all within 15 seconds of execution.
+The script exits with code 0 on success and code 1 with a descriptive error message if the Tempo API returns a non-2xx response or if jq cannot parse the response, verified by temporarily stopping Tempo with docker compose stop tempo and confirming the error message and exit code 1 appear.
+Expected Outcomes
+A fully operational six-service observability stack running on your EC2 instance where distributed traces flow from the instrumented application through the OpenTelemetry Collector into Tempo, metrics flow into Prometheus, and all data is queryable and correlated in Grafana.
+A repeatable, script-driven workflow for deploying the stack, generating load, importing dashboards, and querying trace data that requires no manual browser interaction beyond final visual verification.
+Conclusion
+This lab required you to design and wire together every layer of a distributed tracing system from scratch: storage, collection, instrumentation, visualization, and programmatic querying. The deliberate absence of templates forces you to read primary documentation and make architectural decisions â the same decisions you will face in production environments. Revisit the Tempo metrics generator configuration and the OTel Collector pipeline definitions; understanding how span metrics are derived from raw traces is the foundation for building SLO-based alerting on trace data.
