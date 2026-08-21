@@ -1,0 +1,775 @@
+Automating Grafana Dashboard Provisioning with Terraform
+Learning Objectives
+By the end of this lab, you will be able to:
+
+Install and configure Terraform on a Linux system
+Set up Grafana server with proper authentication
+Use Terraform to automate Grafana dashboard creation
+Manage Grafana data sources through Infrastructure as Code
+Configure Grafana settings and organizations using Terraform
+Implement version control for Grafana configurations
+Troubleshoot common Terraform and Grafana integration issues
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Linux command line operations
+Familiarity with JSON and HCL (HashiCorp Configuration Language) syntax
+Basic knowledge of monitoring concepts and dashboards
+Understanding of Infrastructure as Code principles
+Experience with text editors like nano or vim
+Lab Environment
+Al Nafi provides Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated environment. The provided Linux machine is bare metal with no pre-installed tools, so you will install all required software during the lab exercises.
+
+Task 1: Environment Setup and Tool Installation
+Subtask 1.1: Update System and Install Dependencies
+First, update your system and install essential packages:
+
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y curl wget unzip software-properties-common apt-transport-https ca-certificates gnupg lsb-release
+Subtask 1.2: Install Terraform
+Download and install the latest version of Terraform:
+
+# Download Terraform
+wget https://releases.hashicorp.com/terraform/1.6.6/terraform_1.6.6_linux_amd64.zip
+
+# Unzip and install
+unzip terraform_1.6.6_linux_amd64.zip
+sudo mv terraform /usr/local/bin/
+
+# Verify installation
+terraform version
+Subtask 1.3: Install Docker for Grafana
+Install Docker to run Grafana in a container:
+
+# Install Docker
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+
+# Add user to docker group
+sudo usermod -aG docker $USER
+
+# Start Docker service
+sudo systemctl start docker
+sudo systemctl enable docker
+
+# Verify Docker installation
+sudo docker --version
+Subtask 1.4: Start Grafana Container
+Launch Grafana using Docker:
+
+# Create a directory for Grafana data
+mkdir -p ~/grafana-data
+
+# Run Grafana container
+sudo docker run -d \
+  --name grafana \
+  -p 3000:3000 \
+  -v ~/grafana-data:/var/lib/grafana \
+  -e "GF_SECURITY_ADMIN_PASSWORD=admin123" \
+  -e "GF_USERS_ALLOW_SIGN_UP=false" \
+  grafana/grafana:latest
+
+# Verify Grafana is running
+sudo docker ps
+Subtask 1.5: Verify Grafana Access
+Test Grafana accessibility:
+
+# Wait for Grafana to start (about 30 seconds)
+sleep 30
+
+# Test Grafana endpoint
+curl -I http://localhost:3000
+
+# Get Grafana container logs to ensure it's running properly
+sudo docker logs grafana
+Task 2: Configure Terraform for Grafana Integration
+Subtask 2.1: Create Terraform Project Structure
+Set up the project directory structure:
+
+# Create project directory
+mkdir ~/terraform-grafana-lab
+cd ~/terraform-grafana-lab
+
+# Create subdirectories
+mkdir -p {dashboards,datasources,terraform}
+Subtask 2.2: Create Terraform Provider Configuration
+Create the main Terraform configuration file:
+
+cat > terraform/main.tf << 'EOF'
+terraform {
+  required_providers {
+    grafana = {
+      source  = "grafana/grafana"
+      version = "~> 2.9.0"
+    }
+  }
+}
+
+# Configure the Grafana Provider
+provider "grafana" {
+  url  = "http://localhost:3000"
+  auth = "admin:admin123"
+}
+
+# Create an organization
+resource "grafana_organization" "lab_org" {
+  name         = "Lab Organization"
+  admin_user   = "admin"
+  create_users = true
+  admins       = ["admin"]
+}
+
+# Create a folder for organizing dashboards
+resource "grafana_folder" "monitoring_folder" {
+  title = "Monitoring Dashboards"
+  org_id = grafana_organization.lab_org.id
+}
+EOF
+Subtask 2.3: Initialize Terraform
+Initialize the Terraform working directory:
+
+cd terraform
+terraform init
+Subtask 2.4: Create Terraform Variables File
+Create a variables file for better configuration management:
+
+cat > variables.tf << 'EOF'
+variable "grafana_url" {
+  description = "Grafana server URL"
+  type        = string
+  default     = "http://localhost:3000"
+}
+
+variable "grafana_admin_password" {
+  description = "Grafana admin password"
+  type        = string
+  default     = "admin123"
+  sensitive   = true
+}
+
+variable "organization_name" {
+  description = "Name of the Grafana organization"
+  type        = string
+  default     = "Lab Organization"
+}
+EOF
+Task 3: Create and Manage Data Sources with Terraform
+Subtask 3.1: Install Prometheus for Data Source
+Install Prometheus to serve as a data source:
+
+# Download Prometheus
+cd ~
+wget https://github.com/prometheus/prometheus/releases/download/v2.48.0/prometheus-2.48.0.linux-amd64.tar.gz
+
+# Extract and setup
+tar xvfz prometheus-2.48.0.linux-amd64.tar.gz
+cd prometheus-2.48.0.linux-amd64
+
+# Create Prometheus configuration
+cat > prometheus.yml << 'EOF'
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+  
+  - job_name: 'node'
+    static_configs:
+      - targets: ['localhost:9100']
+EOF
+
+# Start Prometheus in background
+nohup ./prometheus --config.file=prometheus.yml --storage.tsdb.path=./data > prometheus.log 2>&1 &
+
+# Verify Prometheus is running
+sleep 10
+curl http://localhost:9090/api/v1/status/config
+Subtask 3.2: Create Data Source Configuration
+Add Prometheus data source configuration to Terraform:
+
+cd ~/terraform-grafana-lab/terraform
+
+cat >> main.tf << 'EOF'
+
+# Create Prometheus data source
+resource "grafana_data_source" "prometheus" {
+  type          = "prometheus"
+  name          = "Prometheus"
+  url           = "http://localhost:9090"
+  is_default    = true
+  org_id        = grafana_organization.lab_org.id
+
+  json_data_encoded = jsonencode({
+    httpMethod   = "POST"
+    queryTimeout = "60s"
+  })
+}
+
+# Create TestData data source for demo purposes
+resource "grafana_data_source" "testdata" {
+  type       = "testdata"
+  name       = "TestData"
+  org_id     = grafana_organization.lab_org.id
+}
+EOF
+Subtask 3.3: Apply Data Source Configuration
+Apply the Terraform configuration to create data sources:
+
+# Plan the changes
+terraform plan
+
+# Apply the configuration
+terraform apply -auto-approve
+
+# Verify data sources were created
+curl -u admin:admin123 http://localhost:3000/api/datasources
+Task 4: Create Automated Dashboard Provisioning
+Subtask 4.1: Create Dashboard JSON Template
+Create a sample dashboard configuration:
+
+cd ~/terraform-grafana-lab
+
+cat > dashboards/system-metrics.json << 'EOF'
+{
+  "dashboard": {
+    "id": null,
+    "title": "System Metrics Dashboard",
+    "tags": ["terraform", "system", "monitoring"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "CPU Usage",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "100 - (avg(irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100
+          }
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 0
+        }
+      },
+      {
+        "id": 2,
+        "title": "Memory Usage",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100
+          }
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 0
+        }
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "30s"
+  }
+}
+EOF
+Subtask 4.2: Create Simple Test Dashboard
+Create a simpler dashboard using TestData source:
+
+cat > dashboards/test-dashboard.json << 'EOF'
+{
+  "dashboard": {
+    "id": null,
+    "title": "Test Data Dashboard",
+    "tags": ["terraform", "test"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Random Walk",
+        "type": "timeseries",
+        "targets": [
+          {
+            "datasource": {
+              "type": "testdata",
+              "uid": "testdata"
+            },
+            "refId": "A",
+            "scenarioId": "random_walk"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 24,
+          "x": 0,
+          "y": 0
+        }
+      },
+      {
+        "id": 2,
+        "title": "Linear Growth",
+        "type": "timeseries",
+        "targets": [
+          {
+            "datasource": {
+              "type": "testdata",
+              "uid": "testdata"
+            },
+            "refId": "A",
+            "scenarioId": "slow_query"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 24,
+          "x": 0,
+          "y": 8
+        }
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "5s"
+  }
+}
+EOF
+Subtask 4.3: Add Dashboard Resources to Terraform
+Update Terraform configuration to include dashboard provisioning:
+
+cd ~/terraform-grafana-lab/terraform
+
+cat >> main.tf << 'EOF'
+
+# Create Test Data Dashboard
+resource "grafana_dashboard" "test_dashboard" {
+  org_id      = grafana_organization.lab_org.id
+  folder      = grafana_folder.monitoring_folder.id
+  config_json = file("../dashboards/test-dashboard.json")
+}
+
+# Create System Metrics Dashboard
+resource "grafana_dashboard" "system_dashboard" {
+  org_id      = grafana_organization.lab_org.id
+  folder      = grafana_folder.monitoring_folder.id
+  config_json = file("../dashboards/system-metrics.json")
+}
+EOF
+Subtask 4.4: Apply Dashboard Configuration
+Deploy the dashboards using Terraform:
+
+# Plan the dashboard deployment
+terraform plan
+
+# Apply the configuration
+terraform apply -auto-approve
+
+# Verify dashboards were created
+curl -u admin:admin123 http://localhost:3000/api/search
+Task 5: Advanced Grafana Configuration Management
+Subtask 5.1: Create User Management Configuration
+Add user and team management to Terraform:
+
+cat >> main.tf << 'EOF'
+
+# Create a team
+resource "grafana_team" "monitoring_team" {
+  name    = "Monitoring Team"
+  email   = "monitoring@company.com"
+  org_id  = grafana_organization.lab_org.id
+}
+
+# Create a user
+resource "grafana_user" "monitoring_user" {
+  email    = "monitor@company.com"
+  name     = "Monitor User"
+  login    = "monitor"
+  password = "monitor123"
+  is_admin = false
+}
+
+# Add user to organization
+resource "grafana_organization_user" "monitoring_user_org" {
+  org_id = grafana_organization.lab_org.id
+  user_id = grafana_user.monitoring_user.id
+  role    = "Editor"
+}
+
+# Add user to team
+resource "grafana_team_membership" "monitoring_user_team" {
+  team_id = grafana_team.monitoring_team.id
+  user_id = grafana_user.monitoring_user.id
+}
+EOF
+Subtask 5.2: Configure Dashboard Permissions
+Add dashboard permission management:
+
+cat >> main.tf << 'EOF'
+
+# Set dashboard permissions
+resource "grafana_dashboard_permission" "test_dashboard_permissions" {
+  dashboard_id = grafana_dashboard.test_dashboard.id
+  org_id       = grafana_organization.lab_org.id
+
+  permissions {
+    role       = "Editor"
+    permission = "Edit"
+  }
+
+  permissions {
+    role       = "Viewer"
+    permission = "View"
+  }
+
+  permissions {
+    team_id    = grafana_team.monitoring_team.id
+    permission = "Edit"
+  }
+}
+EOF
+Subtask 5.3: Create Alert Rules Configuration
+Add basic alerting configuration:
+
+cat >> main.tf << 'EOF'
+
+# Create notification channel
+resource "grafana_contact_point" "email_contact" {
+  org_id = grafana_organization.lab_org.id
+  name   = "email-notifications"
+
+  email {
+    addresses = ["admin@company.com"]
+    subject   = "Grafana Alert"
+  }
+}
+
+# Create notification policy
+resource "grafana_notification_policy" "alert_policy" {
+  org_id           = grafana_organization.lab_org.id
+  contact_point    = grafana_contact_point.email_contact.name
+  group_by         = ["alertname"]
+  group_wait       = "10s"
+  group_interval   = "5m"
+  repeat_interval  = "12h"
+}
+EOF
+Subtask 5.4: Apply Complete Configuration
+Apply all configurations:
+
+# Plan all changes
+terraform plan
+
+# Apply complete configuration
+terraform apply -auto-approve
+
+# Verify all resources
+echo "=== Organizations ==="
+curl -u admin:admin123 http://localhost:3000/api/orgs
+
+echo "=== Data Sources ==="
+curl -u admin:admin123 http://localhost:3000/api/datasources
+
+echo "=== Dashboards ==="
+curl -u admin:admin123 http://localhost:3000/api/search
+
+echo "=== Users ==="
+curl -u admin:admin123 http://localhost:3000/api/org/users
+Task 6: Testing and Validation
+Subtask 6.1: Verify Dashboard Functionality
+Test the created dashboards:
+
+# Get dashboard details
+DASHBOARD_UID=$(curl -s -u admin:admin123 http://localhost:3000/api/search | grep -o '"uid":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+echo "Dashboard UID: $DASHBOARD_UID"
+
+# Get dashboard JSON
+curl -u admin:admin123 "http://localhost:3000/api/dashboards/uid/$DASHBOARD_UID" | jq '.'
+Subtask 6.2: Test Data Source Connectivity
+Verify data source connections:
+
+# Test Prometheus data source
+curl -u admin:admin123 "http://localhost:3000/api/datasources/proxy/1/api/v1/query?query=up"
+
+# List all data sources with their IDs
+curl -u admin:admin123 http://localhost:3000/api/datasources | jq '.[] | {id: .id, name: .name, type: .type}'
+Subtask 6.3: Validate Terraform State
+Check Terraform state and resources:
+
+# Show Terraform state
+terraform show
+
+# List all resources
+terraform state list
+
+# Get specific resource details
+terraform state show grafana_dashboard.test_dashboard
+Subtask 6.4: Test Configuration Changes
+Make a change and apply it:
+
+# Create a new simple dashboard
+cat > ../dashboards/simple-dashboard.json << 'EOF'
+{
+  "dashboard": {
+    "id": null,
+    "title": "Simple Monitoring Dashboard",
+    "tags": ["terraform", "simple"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Server Uptime",
+        "type": "stat",
+        "targets": [
+          {
+            "datasource": {
+              "type": "testdata",
+              "uid": "testdata"
+            },
+            "refId": "A",
+            "scenarioId": "random_walk"
+          }
+        ],
+        "gridPos": {
+          "h": 6,
+          "w": 12,
+          "x": 0,
+          "y": 0
+        }
+      }
+    ],
+    "time": {
+      "from": "now-6h",
+      "to": "now"
+    },
+    "refresh": "1m"
+  }
+}
+EOF
+
+# Add new dashboard to Terraform
+cat >> main.tf << 'EOF'
+
+# Create Simple Dashboard
+resource "grafana_dashboard" "simple_dashboard" {
+  org_id      = grafana_organization.lab_org.id
+  folder      = grafana_folder.monitoring_folder.id
+  config_json = file("../dashboards/simple-dashboard.json")
+}
+EOF
+
+# Apply the new configuration
+terraform plan
+terraform apply -auto-approve
+Task 7: Cleanup and Resource Management
+Subtask 7.1: Create Terraform Outputs
+Add outputs to track important information:
+
+cat >> main.tf << 'EOF'
+
+# Outputs
+output "grafana_url" {
+  description = "Grafana server URL"
+  value       = "http://localhost:3000"
+}
+
+output "organization_id" {
+  description = "Created organization ID"
+  value       = grafana_organization.lab_org.id
+}
+
+output "dashboard_urls" {
+  description = "Dashboard URLs"
+  value = {
+    test_dashboard   = "http://localhost:3000/d/${grafana_dashboard.test_dashboard.uid}"
+    system_dashboard = "http://localhost:3000/d/${grafana_dashboard.system_dashboard.uid}"
+    simple_dashboard = "http://localhost:3000/d/${grafana_dashboard.simple_dashboard.uid}"
+  }
+}
+
+output "data_source_ids" {
+  description = "Data source IDs"
+  value = {
+    prometheus = grafana_data_source.prometheus.id
+    testdata   = grafana_data_source.testdata.id
+  }
+}
+EOF
+
+# Apply to generate outputs
+terraform apply -auto-approve
+
+# Display outputs
+terraform output
+Subtask 7.2: Export Terraform State
+Create a backup of your Terraform state:
+
+# Create backup directory
+mkdir -p ~/terraform-backups
+
+# Copy state file
+cp terraform.tfstate ~/terraform-backups/terraform.tfstate.backup
+
+# Export state to JSON for review
+terraform show -json > ~/terraform-backups/terraform-state.json
+
+echo "Terraform state backed up to ~/terraform-backups/"
+Subtask 7.3: Test Disaster Recovery
+Test the ability to recreate resources:
+
+# Create a plan file
+terraform plan -out=grafana-plan
+
+# Show what would be created/modified
+terraform show grafana-plan
+
+# Verify plan can be applied (don't actually apply)
+echo "Plan created successfully - infrastructure can be recreated from code"
+Subtask 7.4: Document the Infrastructure
+Create documentation for the infrastructure:
+
+cat > ~/terraform-grafana-lab/README.md << 'EOF'
+# Grafana Infrastructure as Code
+
+## Overview
+This project manages Grafana infrastructure using Terraform, including:
+- Organizations and users
+- Data sources (Prometheus, TestData)
+- Dashboards and folders
+- Teams and permissions
+- Alert configurations
+
+## Usage
+
+### Prerequisites
+- Terraform >= 1.6.0
+- Docker
+- Grafana container running on port 3000
+
+### Deployment
+```bash
+cd terraform
+terraform init
+terraform plan
+terraform apply
+Accessing Grafana
+URL: http://localhost:3000
+Username: admin
+Password: admin123
+Dashboards Created
+Test Data Dashboard - Uses TestData source for demo
+System Metrics Dashboard - Prometheus-based system monitoring
+Simple Monitoring Dashboard - Basic monitoring example
+Data Sources
+Prometheus: http://localhost:9090
+TestData: Built-in test data generator
+Maintenance
+State file: terraform.tfstate
+Backups: ~/terraform-backups/
+Logs: Check Docker logs for Grafana issues EOF
+echo "Documentation created at ~/terraform-grafana-lab/README.md"
+
+
+## Troubleshooting Common Issues
+
+### Issue 1: Grafana Connection Failed
+
+If Terraform cannot connect to Grafana:
+
+```bash
+# Check if Grafana is running
+sudo docker ps | grep grafana
+
+# Check Grafana logs
+sudo docker logs grafana
+
+# Restart Grafana if needed
+sudo docker restart grafana
+
+# Wait for startup
+sleep 30
+
+# Test connection
+curl -I http://localhost:3000
+Issue 2: Dashboard Creation Failed
+If dashboard creation fails:
+
+# Validate JSON syntax
+cat dashboards/test-dashboard.json | jq '.'
+
+# Check Grafana API directly
+curl -u admin:admin123 -X POST \
+  -H "Content-Type: application/json" \
+  -d @dashboards/test-dashboard.json \
+  http://localhost:3000/api/dashboards/db
+Issue 3: Data Source Connection Issues
+If data sources cannot connect:
+
+# Check Prometheus status
+curl http://localhost:9090/api/v1/status/config
+
+# Test data source from Grafana
+curl -u admin:admin123 http://localhost:3000/api/datasources/proxy/1/api/v1/query?query=up
+
+# Restart Prometheus if needed
+pkill prometheus
+cd ~/prometheus-2.48.0.linux-amd64
+nohup ./prometheus --config.file=prometheus.yml --storage.tsdb.path=./data > prometheus.log 2>&1 &
+Issue 4: Terraform State Issues
+If Terraform state becomes corrupted:
+
+# Restore from backup
+cp ~/terraform-backups/terraform.tfstate.backup terraform.tfstate
+
+# Refresh state
+terraform refresh
+
+# Import existing resources if needed
+terraform import grafana_organization.lab_org 1
+Conclusion
+In this comprehensive lab, you have successfully:
+
+Set up a complete Infrastructure as Code environment for Grafana using Terraform, demonstrating how modern DevOps practices can automate monitoring infrastructure deployment.
+
+Automated Grafana resource provisioning including organizations, users, teams, data sources, and dashboards, eliminating manual configuration and ensuring consistency across environments.
+
+Implemented version-controlled dashboard management using JSON templates and Terraform, enabling collaborative development and change tracking for monitoring configurations.
+
+Configured multiple data sources including Prometheus for real metrics and TestData for demonstrations, showing how to integrate various monitoring backends.
+
+Established proper access controls through user management, team assignments, and dashboard permissions, implementing security best practices for monitoring systems.
+
+Created reusable and maintainable infrastructure code that can be easily modified, extended, and deployed across different environments.
+
+This approach to Grafana management provides significant benefits in production environments:
+
+Consistency: All environments use identical configurations
+Version Control: Changes are tracked and can be rolled back
+Automation: Reduces manual errors and deployment time
+Scalability: Easy to replicate across multiple instances
+Documentation: Infrastructure is self-documenting through code
+The skills you've developed in this lab are directly applicable to enterprise monitoring deployments, where Infrastructure as Code practices are essential for maintaining reliable and scalable observability platforms. You can now confidently implement automated Grafana provisioning in real-world scenarios, contributing to more efficient and reliable monitoring operations.
